@@ -32,6 +32,10 @@ const I = {
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
 };
 const MOODS = [['great', '😄', 'ดีมาก'], ['good', '🙂', 'ดี'], ['ok', '😐', 'เฉยๆ'], ['bad', '😔', 'แย่'], ['awful', '😢', 'แย่มาก']];
+const CATS = [['life', 'ชีวิตทั่วไป'], ['health', 'สุขภาพ'], ['invest', 'การลงทุน']];
+const catOf = e => CATS.some(c => c[0] === e.cat) ? e.cat : 'life'; // บันทึกเก่าที่ไม่มีหมวด = ชีวิตทั่วไป
+const catName = id => CATS.find(c => c[0] === id)[1];
+const inCat = e => state.cat === 'all' || catOf(e) === state.cat;
 
 /* ================= database (IndexedDB, อยู่ในเครื่องเท่านั้น) ================= */
 let db;
@@ -58,7 +62,7 @@ const dbDel = (s, k) => req(store(s, 'readwrite').delete(k));
 
 /* ================= state ================= */
 const state = {
-  view: 'home', entries: [], atts: [], q: '', calOpen: false, calMonth: today().slice(0, 7), day: null,
+  view: 'home', entries: [], atts: [], q: '', cat: 'all', calOpen: false, calMonth: today().slice(0, 7), day: null,
   cur: null, curSaved: false, busy: 0, viewer: null, pin: null, locked: false, hiddenAt: 0,
   settings: { compress: true },
 };
@@ -148,6 +152,7 @@ function renderHome() {
       <button class="icon-btn" data-act="settings" aria-label="ตั้งค่า">${I.sliders}</button>
     </div></header>
     <div class="search">${I.search}<input type="search" id="q" placeholder="ค้นหาบันทึก" autocomplete="off" value="${esc(state.q)}"></div>
+    <nav class="tabs" aria-label="หมวด">${[['all', 'ทั้งหมด'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
     <div id="cal"></div>
     <main id="list" class="list"></main>
     <button class="fab" data-act="new" aria-label="เขียนบันทึกใหม่">${I.plus}</button>`;
@@ -163,7 +168,7 @@ function renderCal() {
   const [y, m] = state.calMonth.split('-').map(Number);
   const lead = new Date(y, m - 1, 1).getDay();
   const days = new Date(y, m, 0).getDate();
-  const has = new Set(state.entries.map(e => e.date));
+  const has = new Set(state.entries.filter(inCat).map(e => e.date));
   const t = today();
   let cells = '<i></i>'.repeat(lead);
   for (let d = 1; d <= days; d++) {
@@ -185,7 +190,7 @@ function renderList() {
   const el = $('#list');
   if (!el) return;
   const q = state.q.trim().toLowerCase();
-  let items = state.entries;
+  let items = state.entries.filter(inCat);
   if (state.day) items = items.filter(e => e.date === state.day);
   if (q) items = items.filter(e => (e.title + '\n' + e.text).toLowerCase().includes(q) || attsOf(e.id).some(a => a.name.toLowerCase().includes(q)));
 
@@ -194,7 +199,9 @@ function renderList() {
   if (!items.length) {
     html += q || state.day
       ? `<div class="empty"><b>ไม่พบบันทึก</b>${state.day ? 'ยังไม่มีบันทึกของวันนี้ กด + เพื่อเขียน' : 'ลองค้นหาด้วยคำอื่น'}</div>`
-      : `<div class="empty"><b>ยังไม่มีบันทึก</b>กดปุ่ม + ด้านล่างเพื่อเริ่มเขียนไดอารี่หน้าแรก</div>`;
+      : state.cat !== 'all'
+        ? `<div class="empty"><b>ยังไม่มีบันทึกในหมวด${catName(state.cat)}</b>กดปุ่ม + ด้านล่างเพื่อเขียนบันทึกในหมวดนี้</div>`
+        : `<div class="empty"><b>ยังไม่มีบันทึก</b>กดปุ่ม + ด้านล่างเพื่อเริ่มเขียนไดอารี่หน้าแรก</div>`;
   } else {
     let month = '';
     for (const e of items) {
@@ -218,6 +225,7 @@ function card(e) {
       <div class="card-head">${e.title ? `<h3>${esc(e.title)}</h3>` : text ? `<p class="solo" style="flex:1;margin:0">${esc(text)}</p>` : `<h3 style="color:var(--muted);font-weight:400">ไม่มีข้อความ</h3>`}
         ${mood ? `<span class="mood" title="${mood[2]}">${mood[1]}</span>` : ''}</div>
       ${e.title && text ? `<p>${esc(text)}</p>` : ''}
+      ${state.cat === 'all' ? `<span class="tag c-${catOf(e)}">${catName(catOf(e))}</span>` : ''}
       ${imgs.length ? `<div class="thumbs">${imgs.slice(0, 4).map(a => `<img src="${a.thumb}" alt="" loading="lazy">`).join('')}${imgs.length > 4 ? `<span class="more">+${imgs.length - 4}</span>` : ''}</div>` : ''}
       ${files ? `<div class="files">${I.clip} ${files} ไฟล์แนบ</div>` : ''}
     </div></article>`;
@@ -243,6 +251,7 @@ function renderEditor() {
     <main class="editor">
       <label class="date-pick">${I.cal}<span id="date-label">${fmtDate(e.date)}</span>
         <input type="date" id="e-date" value="${e.date}" aria-label="วันที่"></label>
+      <div class="cats" role="group" aria-label="หมวด">${CATS.map(c => `<button data-act="set-cat" data-cat="${c[0]}" class="c-${c[0]} ${catOf(e) === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</div>
       <div class="moods">${MOODS.map(m => `<button data-act="mood" data-mood="${m[0]}" class="${e.mood === m[0] ? 'on' : ''}" aria-label="${m[2]}" title="${m[2]}">${m[1]}</button>`).join('')}</div>
       <input id="e-title" class="e-title" placeholder="หัวข้อ" maxlength="120" value="${esc(e.title)}">
       <textarea id="e-text" placeholder="วันนี้เป็นอย่างไรบ้าง…">${esc(e.text)}</textarea>
@@ -500,7 +509,7 @@ async function importFile(file) {
   try {
     for (const e of data.entries) {
       if (!e?.id || !/^\d{4}-\d{2}-\d{2}$/.test(e.date)) continue;
-      await dbPut('entries', { id: String(e.id), date: e.date, title: String(e.title || ''), text: String(e.text || ''), mood: String(e.mood || ''), createdAt: +e.createdAt || Date.now(), updatedAt: +e.updatedAt || Date.now() });
+      await dbPut('entries', { id: String(e.id), date: e.date, cat: catOf(e), title: String(e.title || ''), text: String(e.text || ''), mood: String(e.mood || ''), createdAt: +e.createdAt || Date.now(), updatedAt: +e.updatedAt || Date.now() });
     }
     for (const a of data.attachments || []) {
       if (!a?.id || !a.entryId || typeof a.data !== 'string') continue;
@@ -520,7 +529,13 @@ async function importFile(file) {
 
 /* ================= events ================= */
 const actions = {
-  new: () => { const now = Date.now(); openEditor({ id: uid(), date: state.day || today(), title: '', text: '', mood: '', createdAt: now, updatedAt: now }, false); },
+  new: () => { const now = Date.now(); openEditor({ id: uid(), date: state.day || today(), cat: state.cat === 'all' ? 'life' : state.cat, title: '', text: '', mood: '', createdAt: now, updatedAt: now }, false); },
+  tab: el => { state.cat = el.dataset.cat; renderHome(); },
+  'set-cat': el => {
+    const e = state.cur; e.cat = el.dataset.cat;
+    document.querySelectorAll('.cats button').forEach(b => b.classList.toggle('on', b.dataset.cat === e.cat));
+    if (state.curSaved) scheduleSave();
+  },
   open: el => { const e = state.entries.find(x => x.id === el.dataset.id); if (e) openEditor(e, true); },
   back: () => history.back(),
   settings: () => { state.view = 'settings'; history.pushState({ v: 'settings' }, ''); render(); },
