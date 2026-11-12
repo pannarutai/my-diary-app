@@ -39,7 +39,8 @@ const I = {
   bell: svg('<path d="M6 16v-5a6 6 0 0112 0v5l2 2H4z"/><path d="M10 21a2 2 0 004 0"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/>'),
   done: svg('<circle cx="12" cy="12" r="8.5"/><path d="M8 12.5l3 3 5-6"/>'),
-  sword: svg('<path d="M20 4L9 15M20 4h-4.500M20 4v4.500M6 12l6 6M8.500 15.500L4 20"/>'),
+  // blade outline with a point, cross-guard, grip and pommel
+  sword: svg('<path d="M21 3l-.8 2.800L9.500 16.500l-2-2L18.200 3.800z"/><path d="M5.700 12.700l5.600 5.600M8.500 15.500L5.300 18.700"/><circle cx="4.300" cy="19.700" r="1.300"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
 };
 const MOODS = [['great', '😄', 'Great'], ['good', '🙂', 'Good'], ['ok', '😐', 'Okay'], ['bad', '😔', 'Bad'], ['awful', '😢', 'Awful']];
