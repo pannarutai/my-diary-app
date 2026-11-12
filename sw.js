@@ -1,9 +1,11 @@
-// Lets the app open without internet. Bump the version number whenever app files change.
-const CACHE = 'diary-v5';
-const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'reflect.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
+// Lets the app open without internet. Bump the version number whenever app files change (Life RPG in rpg/ included).
+// Every download here skips the browser's own 10-minute copy, so a new version is never mixed with old files.
+const CACHE = 'diary-v6';
+const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'reflect.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
+  'rpg/', 'rpg/index.html', 'rpg/styles.css', 'rpg/data.js', 'rpg/app.js', 'rpg/icons/icon-192.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -21,7 +23,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   e.respondWith(caches.open(CACHE).then(async cache => {
     const hit = await cache.match(e.request, { ignoreSearch: true });
-    const net = fetch(e.request).then(res => {
+    const net = fetch(e.request.url, { cache: 'no-cache' }).then(res => {
       if (res.ok) cache.put(e.request, res.clone());
       return res;
     }).catch(() => hit);

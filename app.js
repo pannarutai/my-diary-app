@@ -39,6 +39,7 @@ const I = {
   bell: svg('<path d="M6 16v-5a6 6 0 0112 0v5l2 2H4z"/><path d="M10 21a2 2 0 004 0"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/>'),
   done: svg('<circle cx="12" cy="12" r="8.5"/><path d="M8 12.5l3 3 5-6"/>'),
+  sword: svg('<path d="M20 4L9 15M20 4h-4.500M20 4v4.500M6 12l6 6M8.500 15.500L4 20"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
 };
 const MOODS = [['great', '😄', 'Great'], ['good', '🙂', 'Good'], ['ok', '😐', 'Okay'], ['bad', '😔', 'Bad'], ['awful', '😢', 'Awful']];
@@ -231,6 +232,7 @@ function renderHome() {
   app.innerHTML = `
     <header class="top"><h1>${{ today: 'Today', diary: 'Diary', todo: 'To Do', done: 'Done' }[sec]}</h1><div class="row">
       ${diary ? `<button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="Calendar">${I.cal}</button>` : ''}
+      <a class="icon-btn" href="rpg/" aria-label="Open Life RPG" title="Life RPG">${I.sword}</a>
       <button class="icon-btn" data-act="settings" aria-label="Settings">${I.sliders}</button>
     </div></header>
     ${(diary || now) && soon.length ? `<button class="remind" data-act="nav" data-section="todo">${I.bell}<span>${remindSummary(soon)}</span>${I.back}</button>` : ''}
@@ -845,6 +847,17 @@ async function loadAll() {
   render();
   navigator.storage?.persist?.();
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
-  if ('serviceWorker' in navigator && !local) await navigator.serviceWorker.register('sw.js').catch(() => { });
+  if ('serviceWorker' in navigator && !local) {
+    // When a new version of the app takes over, reload once so it shows straight away
+    // (only from the home screen, so nothing being written is interrupted).
+    const hadWorker = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadWorker || reloading || state.view !== 'home' || state.busy) return;
+      reloading = true;
+      location.reload();
+    });
+    await navigator.serviceWorker.register('sw.js').catch(() => { });
+  }
   if (!state.locked) checkReminders();
 })();
