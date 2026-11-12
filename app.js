@@ -29,6 +29,9 @@ const I = {
   clip: svg('<path d="M20 11l-8.5 8.5a5 5 0 01-7-7L13 4a3.5 3.5 0 015 5l-8.5 8.5a2 2 0 01-3-3L14 7"/>'),
   file: svg('<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/>'),
   download: svg('<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>'),
+  book: svg('<path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11"/>'),
+  todo: svg('<path d="M4 7l2 2 3-4M4 16l2 2 3-4M13 7h7M13 17h7"/>'),
+  tick: svg('<path d="M5 12l5 5 9-10"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
 };
 const MOODS = [['great', '😄', 'ดีมาก'], ['good', '🙂', 'ดี'], ['ok', '😐', 'เฉยๆ'], ['bad', '😔', 'แย่'], ['awful', '😢', 'แย่มาก']];
@@ -41,15 +44,20 @@ const inCat = e => state.cat === 'all' || catOf(e) === state.cat;
 let db;
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open('diary', 1);
+    const r = indexedDB.open('diary', 2);
     r.onupgradeneeded = () => {
+      // สร้างเฉพาะที่ยังไม่มี เพื่อให้อัปเกรดจากเวอร์ชันเก่าได้โดยข้อมูลเดิมอยู่ครบ
       const d = r.result;
-      d.createObjectStore('entries', { keyPath: 'id' });
-      d.createObjectStore('attachments', { keyPath: 'id' }); // ข้อมูลไฟล์ + รูปย่อ
-      d.createObjectStore('blobs');                           // ตัวไฟล์จริง (ArrayBuffer)
-      d.createObjectStore('meta');
+      const stores = [
+        ['entries', { keyPath: 'id' }],
+        ['attachments', { keyPath: 'id' }], // ข้อมูลไฟล์ + รูปย่อ
+        ['blobs'],                          // ตัวไฟล์จริง (ArrayBuffer)
+        ['meta'],
+        ['todos', { keyPath: 'id' }],       // เพิ่มใน v2
+      ];
+      for (const [name, opts] of stores) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, opts);
     };
-    r.onsuccess = () => res(r.result);
+    r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); res(r.result); };
     r.onerror = () => rej(r.error);
   });
 }
@@ -62,7 +70,8 @@ const dbDel = (s, k) => req(store(s, 'readwrite').delete(k));
 
 /* ================= state ================= */
 const state = {
-  view: 'home', entries: [], atts: [], q: '', cat: 'all', calOpen: false, calMonth: today().slice(0, 7), day: null,
+  view: 'home', section: 'diary', entries: [], atts: [], q: '', cat: 'all',
+  todos: [], task: null, taskSaved: false, showDone: false, calOpen: false, calMonth: today().slice(0, 7), day: null,
   cur: null, curSaved: false, busy: 0, viewer: null, pin: null, locked: false, hiddenAt: 0,
   settings: { compress: true },
 };
@@ -123,7 +132,7 @@ async function hashPin(pin, salt) {
 /* ================= render ================= */
 function render() {
   if (state.locked) return renderLock();
-  ({ home: renderHome, editor: renderEditor, settings: renderSettings })[state.view]();
+  ({ home: renderHome, editor: renderEditor, settings: renderSettings, task: renderTask })[state.view]();
   window.scrollTo(0, 0);
 }
 
@@ -146,16 +155,22 @@ function renderLock() {
 
 /* ---------- home ---------- */
 function renderHome() {
+  const todo = state.section === 'todo';
+  const openCount = state.todos.filter(t => !t.done).length;
   app.innerHTML = `
-    <header class="top"><h1>ไดอารี่</h1><div class="row">
-      <button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="ปฏิทิน">${I.cal}</button>
+    <header class="top"><h1>${todo ? 'สิ่งที่ต้องทำ' : 'ไดอารี่'}</h1><div class="row">
+      ${todo ? '' : `<button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="ปฏิทิน">${I.cal}</button>`}
       <button class="icon-btn" data-act="settings" aria-label="ตั้งค่า">${I.sliders}</button>
     </div></header>
-    <div class="search">${I.search}<input type="search" id="q" placeholder="ค้นหาบันทึก" autocomplete="off" value="${esc(state.q)}"></div>
+    ${todo ? '' : `<div class="search">${I.search}<input type="search" id="q" placeholder="ค้นหาบันทึก" autocomplete="off" value="${esc(state.q)}"></div>`}
     <nav class="tabs" aria-label="หมวด">${[['all', 'ทั้งหมด'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
-    <div id="cal"></div>
-    <main id="list" class="list"></main>
-    <button class="fab" data-act="new" aria-label="เขียนบันทึกใหม่">${I.plus}</button>`;
+    ${todo ? `<main id="todos" class="list"></main>` : `<div id="cal"></div><main id="list" class="list"></main>`}
+    <button class="fab" data-act="${todo ? 'new-task' : 'new'}" aria-label="${todo ? 'เพิ่มสิ่งที่ต้องทำ' : 'เขียนบันทึกใหม่'}">${I.plus}</button>
+    <nav class="bottom-nav" aria-label="เมนูหลัก">
+      <button data-act="nav" data-section="diary" class="${todo ? '' : 'on'}">${I.book}<span>ไดอารี่</span></button>
+      <button data-act="nav" data-section="todo" class="${todo ? 'on' : ''}">${I.todo}<span>สิ่งที่ต้องทำ${openCount ? ` <em>${openCount}</em>` : ''}</span></button>
+    </nav>`;
+  if (todo) return renderTodos();
   $('#q').addEventListener('input', e => { state.q = e.target.value; renderList(); });
   renderCal();
   renderList();
@@ -445,6 +460,7 @@ function renderSettings() {
         <p>ข้อมูลทั้งหมดอยู่ในโทรศัพท์เครื่องนี้เท่านั้น ถ้าล้างข้อมูลเบราว์เซอร์ ลบแอป หรือเปลี่ยนเครื่อง ข้อมูลจะหาย ควรส่งออกเก็บไว้เป็นระยะ</p></section>
       <section><h2>ข้อมูลในเครื่อง</h2>
         <div class="set-row"><span>บันทึก</span><span>${state.entries.length} รายการ</span></div>
+        <div class="set-row"><span>สิ่งที่ต้องทำ</span><span>${state.todos.length} งาน</span></div>
         <div class="set-row"><span>รูปและไฟล์แนบ</span><span>${state.atts.length} ไฟล์ (${fmtSize(state.atts.reduce((n, a) => n + a.size, 0))})</span></div>
         <div class="set-row"><span>การเก็บถาวร</span><span id="s-persist">…</span></div></section>
     </main>`;
@@ -488,7 +504,7 @@ const toB64 = blob => new Promise((res, rej) => {
 
 async function exportAll() {
   toast('กำลังเตรียมไฟล์สำรอง…');
-  const parts = [`{"app":"diary","version":1,"exportedAt":${JSON.stringify(new Date().toISOString())},"entries":${JSON.stringify(state.entries)},"attachments":[`];
+  const parts = [`{"app":"diary","version":1,"exportedAt":${JSON.stringify(new Date().toISOString())},"entries":${JSON.stringify(state.entries)},"todos":${JSON.stringify(state.todos)},"attachments":[`];
   let first = true;
   for (const a of state.atts) {
     const buf = await dbGet('blobs', a.id);
@@ -504,12 +520,16 @@ async function importFile(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch { return toast('อ่านไฟล์ไม่ได้'); }
   if (data?.app !== 'diary' || !Array.isArray(data.entries)) return toast('ไฟล์นี้ไม่ใช่ไฟล์สำรองของไดอารี่');
-  if (!await ask('นำเข้าข้อมูล', `พบ ${data.entries.length} บันทึก และ ${data.attachments?.length || 0} ไฟล์แนบ บันทึกที่ซ้ำกันจะถูกแทนที่ด้วยข้อมูลจากไฟล์`, 'นำเข้า')) return;
+  if (!await ask('นำเข้าข้อมูล', `พบ ${data.entries.length} บันทึก ${data.todos?.length || 0} งาน และ ${data.attachments?.length || 0} ไฟล์แนบ รายการที่ซ้ำกันจะถูกแทนที่ด้วยข้อมูลจากไฟล์`, 'นำเข้า')) return;
   toast('กำลังนำเข้า…');
   try {
     for (const e of data.entries) {
       if (!e?.id || !/^\d{4}-\d{2}-\d{2}$/.test(e.date)) continue;
       await dbPut('entries', { id: String(e.id), date: e.date, cat: catOf(e), title: String(e.title || ''), text: String(e.text || ''), mood: String(e.mood || ''), createdAt: +e.createdAt || Date.now(), updatedAt: +e.updatedAt || Date.now() });
+    }
+    for (const raw of Array.isArray(data.todos) ? data.todos : []) {
+      const t = cleanTodo(raw);
+      if (t) await dbPut('todos', t);
     }
     for (const a of data.attachments || []) {
       if (!a?.id || !a.entryId || typeof a.data !== 'string') continue;
@@ -529,6 +549,7 @@ async function importFile(file) {
 
 /* ================= events ================= */
 const actions = {
+  ...todoActions,
   new: () => { const now = Date.now(); openEditor({ id: uid(), date: state.day || today(), cat: state.cat === 'all' ? 'life' : state.cat, title: '', text: '', mood: '', createdAt: now, updatedAt: now }, false); },
   tab: el => { state.cat = el.dataset.cat; renderHome(); },
   'set-cat': el => {
@@ -588,7 +609,7 @@ document.addEventListener('click', e => {
   if (el && actions[el.dataset.act]) { e.preventDefault(); actions[el.dataset.act](el); }
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.matches?.('.card')) e.target.click();
+  if (e.key === 'Enter' && e.target.matches?.('.card, .todo .body')) e.target.click();
 });
 
 for (const [id, cam] of [['pick-camera', true], ['pick-gallery', false], ['pick-file', false]]) {
@@ -598,7 +619,7 @@ $('#pick-import').addEventListener('change', async e => { const f = e.target.fil
 
 window.addEventListener('popstate', async () => {
   if (state.viewer) return closeViewer();
-  if (state.view !== 'home') { await leaveEditor(); state.view = 'home'; render(); }
+  if (state.view !== 'home') { await leaveEditor(); await leaveTask(); state.view = 'home'; render(); }
 });
 
 const RELOCK_MS = 5 * 60 * 1000;
@@ -606,18 +627,21 @@ document.addEventListener('visibilitychange', async () => {
   if (document.hidden) {
     state.hiddenAt = Date.now();
     if (saveTimer) await persist();
+    if (taskTimer) await saveTask();
   } else if (state.pin && !state.locked && state.hiddenAt && Date.now() - state.hiddenAt > RELOCK_MS && !state.busy) {
     if (state.viewer) closeViewer();
     await leaveEditor();
+    await leaveTask();
     state.view = 'home'; state.locked = true; render();
   }
 });
-window.addEventListener('pagehide', () => { if (saveTimer) persist(); });
+window.addEventListener('pagehide', () => { if (saveTimer) persist(); if (taskTimer) saveTask(); });
 
 /* ================= boot ================= */
 async function loadAll() {
   state.entries = await dbAll('entries');
   state.atts = await dbAll('attachments');
+  state.todos = (await dbAll('todos')).map(cleanTodo).filter(Boolean);
   sortEntries();
 }
 

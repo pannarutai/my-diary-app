@@ -1,6 +1,6 @@
 // ทำให้แอปเปิดได้แม้ไม่มีอินเทอร์เน็ต — เปลี่ยนเลขเวอร์ชันเมื่อแก้ไฟล์แอป
-const CACHE = 'diary-v2';
-const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
+const CACHE = 'diary-v3';
+const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
