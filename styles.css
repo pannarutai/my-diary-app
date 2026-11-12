@@ -203,6 +203,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .done-toggle { display: flex; align-items: center; gap: 4px; min-height: 44px; margin-top: 4px; padding: 0 4px; color: var(--muted); font-size: 14.5px; font-weight: 600; }
 .done-toggle svg { width: 16px; height: 16px; transform: rotate(180deg); transition: transform .15s; }
 .done-toggle.open svg { transform: rotate(270deg); }
+.done-add { margin: 4px 0 12px; }
 .empty.compact { padding: 20px; }
 
 .due-row { margin-top: 6px; gap: 2px; flex-wrap: wrap; }
@@ -295,6 +296,29 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .sheet { width: min(340px, 100%); background: var(--card); border-radius: 18px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
 .sheet h3 { margin: 0; font-size: 18px; }
 .sheet p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+/* ---------- today: question, on this day, gratitude jar ---------- */
+.today-date { margin: 0 2px 10px; color: var(--muted); font-size: 14.5px; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px 16px; margin-bottom: 12px; box-shadow: var(--shadow); }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.panel h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.panel .note, .panel .step-add input { background: var(--bg); }
+.panel .card { box-shadow: none; background: var(--bg); margin-bottom: 8px; }
+.question { margin: 6px 0 10px; font-size: 20px; font-weight: 700; line-height: 1.35; text-wrap: balance; }
+.hint { margin: 8px 0 0; font-size: 13.5px; color: var(--muted); }
+.past { margin-top: 10px; padding-left: 12px; border-left: 3px solid var(--accent); }
+.past b { font-size: 13px; color: var(--accent); }
+.past p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.mem-label { margin: 12px 0 6px; font-size: 15px; font-weight: 600; }
+.mem-label span { font-weight: 400; font-size: 13.5px; color: var(--muted); margin-left: 4px; }
+.grat { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--line); }
+.grat span { flex: 1; min-width: 0; padding: 10px 0; overflow-wrap: anywhere; }
+.grat small { display: block; color: var(--muted); font-size: 12.5px; }
+.grat .x { color: var(--muted); margin-right: -10px; }
+.grat .x svg { width: 16px; height: 16px; }
+.panel .step-add { margin-top: 10px; }
+.jar-pick { margin-top: 12px; }
+.jar-note .jar-text { color: var(--ink); font-size: 19px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
 
 .toast {
   position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 100px); transform: translateX(-50%);

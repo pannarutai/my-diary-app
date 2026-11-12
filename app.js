@@ -37,6 +37,8 @@ const I = {
   folder: svg('<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>'),
   more: svg('<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>'),
   bell: svg('<path d="M6 16v-5a6 6 0 0112 0v5l2 2H4z"/><path d="M10 21a2 2 0 004 0"/>'),
+  sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/>'),
+  done: svg('<circle cx="12" cy="12" r="8.5"/><path d="M8 12.5l3 3 5-6"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
 };
 const MOODS = [['great', '😄', 'Great'], ['good', '🙂', 'Good'], ['ok', '😐', 'Okay'], ['bad', '😔', 'Bad'], ['awful', '😢', 'Awful']];
@@ -63,7 +65,7 @@ function tagHTML(e) {
 let db;
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open('diary', 2);
+    const r = indexedDB.open('diary', 3);
     r.onupgradeneeded = () => {
       // Only create what is missing, so upgrading keeps all existing data.
       const d = r.result;
@@ -73,6 +75,8 @@ function openDB() {
         ['blobs'],                          // the file itself (ArrayBuffer)
         ['meta'],                           // pin, settings, folders, lastNotified
         ['todos', { keyPath: 'id' }],       // added in v2
+        ['answers', { keyPath: 'id' }],     // added in v3: question of the day, one per date
+        ['gratitude', { keyPath: 'id' }],   // added in v3
       ];
       for (const [name, opts] of stores) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, opts);
     };
@@ -89,8 +93,9 @@ const dbDel = (s, k) => req(store(s, 'readwrite').delete(k));
 
 /* ================= state ================= */
 const state = {
-  view: 'home', section: 'diary', entries: [], atts: [], q: '', cat: 'all', folder: '', folders: [],
-  todos: [], task: null, taskSaved: false, showDone: false,
+  view: 'home', section: 'today', entries: [], atts: [], q: '', cat: 'all', folder: '', folders: [],
+  todos: [], task: null, taskSaved: false,
+  answers: [], grats: [], showJar: false,
   calOpen: false, calMonth: today().slice(0, 7), day: null,
   cur: null, curSaved: false, busy: 0, viewer: null, pin: null, locked: false, hiddenAt: 0,
   settings: { compress: true, notify: false, remindDays: 1 },
@@ -219,26 +224,31 @@ function folderRow() {
 }
 
 function renderHome() {
-  const todo = state.section === 'todo';
+  const sec = state.section, diary = sec === 'diary', todo = sec === 'todo', now = sec === 'today';
   const openCount = state.todos.filter(t => !t.done).length;
   const soon = dueSoon();
+  const navBtn = (id, icon, label) => `<button data-act="nav" data-section="${id}" class="${sec === id ? 'on' : ''}">${icon}<span>${label}</span></button>`;
   app.innerHTML = `
-    <header class="top"><h1>${todo ? 'To Do' : 'Diary'}</h1><div class="row">
-      ${todo ? '' : `<button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="Calendar">${I.cal}</button>`}
+    <header class="top"><h1>${{ today: 'Today', diary: 'Diary', todo: 'To Do', done: 'Done' }[sec]}</h1><div class="row">
+      ${diary ? `<button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="Calendar">${I.cal}</button>` : ''}
       <button class="icon-btn" data-act="settings" aria-label="Settings">${I.sliders}</button>
     </div></header>
-    ${!todo && soon.length ? `<button class="remind" data-act="nav" data-section="todo">${I.bell}<span>${remindSummary(soon)}</span>${I.back}</button>` : ''}
-    ${todo ? '' : `<div class="search">${I.search}<input type="search" id="q" placeholder="Search entries" autocomplete="off" value="${esc(state.q)}"></div>`}
-    <nav class="tabs" aria-label="Categories">${[['all', 'All'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
-    ${folderRow()}
-    ${todo ? `<main id="todos" class="list"></main>` : `<div id="cal"></div><main id="list" class="list"></main>`}
-    <button class="fab" data-act="${todo ? 'new-task' : 'new'}" aria-label="${todo ? 'Add a task' : 'Write a new entry'}">${I.plus}</button>
+    ${(diary || now) && soon.length ? `<button class="remind" data-act="nav" data-section="todo">${I.bell}<span>${remindSummary(soon)}</span>${I.back}</button>` : ''}
+    ${diary ? `<div class="search">${I.search}<input type="search" id="q" placeholder="Search entries" autocomplete="off" value="${esc(state.q)}"></div>` : ''}
+    ${now ? '' : `<nav class="tabs" aria-label="Categories">${[['all', 'All'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
+    ${folderRow()}`}
+    ${diary ? `<div id="cal"></div><main id="list" class="list"></main>` : `<main id="${{ today: 'today', todo: 'todos', done: 'done' }[sec]}" class="list"></main>`}
+    ${diary || todo ? `<button class="fab" data-act="${todo ? 'new-task' : 'new'}" aria-label="${todo ? 'Add a task' : 'Write a new entry'}">${I.plus}</button>` : ''}
     <nav class="bottom-nav" aria-label="Main">
-      <button data-act="nav" data-section="diary" class="${todo ? '' : 'on'}">${I.book}<span>Diary</span></button>
-      <button data-act="nav" data-section="todo" class="${todo ? 'on' : ''}">${I.todo}<span>To Do${openCount ? ` <em>${openCount}</em>` : ''}</span></button>
+      ${navBtn('today', I.sun, 'Today')}
+      ${navBtn('diary', I.book, 'Diary')}
+      ${navBtn('todo', I.todo, `To Do${openCount ? ` <em>${openCount}</em>` : ''}`)}
+      ${navBtn('done', I.done, 'Done')}
     </nav>`;
   updateBadge();
+  if (now) return renderToday();
   if (todo) return renderTodos();
+  if (sec === 'done') return renderDone();
   $('#q').addEventListener('input', e => { state.q = e.target.value; renderList(); });
   renderCal();
   renderList();
@@ -558,6 +568,8 @@ function renderSettings() {
         <div class="set-row"><span>Diary entries</span><span>${state.entries.length}</span></div>
         <div class="set-row"><span>Tasks</span><span>${state.todos.length}</span></div>
         <div class="set-row"><span>Folders</span><span>${state.folders.length}</span></div>
+        <div class="set-row"><span>Answered questions</span><span>${state.answers.length}</span></div>
+        <div class="set-row"><span>Gratitude notes</span><span>${state.grats.length}</span></div>
         <div class="set-row"><span>Photos and files</span><span>${state.atts.length} (${fmtSize(state.atts.reduce((n, a) => n + a.size, 0))})</span></div>
         <div class="set-row"><span>Protected storage</span><span id="s-persist">…</span></div></section>
     </main>`;
@@ -600,7 +612,7 @@ const toB64 = blob => new Promise((res, rej) => {
 
 async function exportAll() {
   toast('Preparing the backup file…');
-  const head = { app: 'diary', version: 2, exportedAt: new Date().toISOString(), folders: state.folders, entries: state.entries, todos: state.todos };
+  const head = { app: 'diary', version: 2, exportedAt: new Date().toISOString(), folders: state.folders, entries: state.entries, todos: state.todos, answers: state.answers, gratitude: state.grats };
   const parts = [JSON.stringify(head).slice(0, -1) + ',"attachments":['];
   let first = true;
   for (const a of state.atts) {
@@ -634,6 +646,14 @@ async function importFile(file) {
     for (const raw of Array.isArray(data.todos) ? data.todos : []) {
       const t = cleanTodo(raw);
       if (t) await dbPut('todos', t);
+    }
+    for (const raw of Array.isArray(data.answers) ? data.answers : []) {
+      const a = cleanAnswer(raw);
+      if (a) await dbPut('answers', a);
+    }
+    for (const raw of Array.isArray(data.gratitude) ? data.gratitude : []) {
+      const g = cleanGrat(raw);
+      if (g) await dbPut('gratitude', g);
     }
     for (const a of data.attachments || []) {
       if (!a?.id || !a.entryId || typeof a.data !== 'string') continue;
@@ -695,6 +715,7 @@ async function folderMenu() {
 /* ================= events ================= */
 const actions = {
   ...todoActions,
+  ...reflectActions,
   new: () => { const now = Date.now(); openEditor({ id: uid(), date: state.day || today(), cat: state.cat === 'all' ? 'life' : state.cat, folder: state.folder, title: '', text: '', mood: '', createdAt: now, updatedAt: now }, false); },
   tab: el => { state.cat = el.dataset.cat; state.folder = ''; renderHome(); },
   folder: el => { state.folder = el.dataset.id; renderHome(); },
@@ -785,6 +806,7 @@ document.addEventListener('visibilitychange', async () => {
     state.hiddenAt = Date.now();
     if (saveTimer) await persist();
     if (taskTimer) await saveTask();
+    if (answerTimer) await saveAnswer();
   } else if (state.pin && !state.locked && state.hiddenAt && Date.now() - state.hiddenAt > RELOCK_MS && !state.busy) {
     if (state.viewer) closeViewer();
     await leaveEditor();
@@ -794,7 +816,7 @@ document.addEventListener('visibilitychange', async () => {
     checkReminders();
   }
 });
-window.addEventListener('pagehide', () => { if (saveTimer) persist(); if (taskTimer) saveTask(); });
+window.addEventListener('pagehide', () => { if (saveTimer) persist(); if (taskTimer) saveTask(); if (answerTimer) saveAnswer(); });
 
 /* ================= boot ================= */
 async function loadAll() {
@@ -802,6 +824,8 @@ async function loadAll() {
   state.atts = await dbAll('attachments');
   state.folders = await dbGet('meta', 'folders') || [];
   state.todos = (await dbAll('todos')).map(cleanTodo).filter(Boolean);
+  state.answers = await dbAll('answers');
+  state.grats = await dbAll('gratitude');
   sortEntries();
 }
 

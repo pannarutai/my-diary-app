@@ -1,6 +1,6 @@
 // Lets the app open without internet. Bump the version number whenever app files change.
-const CACHE = 'diary-v4';
-const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
+const CACHE = 'diary-v5';
+const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'reflect.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -9,7 +9,8 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      // Only this app's old caches: other apps on the same web address (Life RPG) keep theirs.
+      .then(keys => Promise.all(keys.filter(k => k.startsWith('diary-') && k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });

@@ -2,6 +2,7 @@
 /* ================= To Do list + reminders =================
    Loaded before app.js. This file only defines functions; they use the shared
    globals from app.js (state, I, $, ...) when they are called.
+   A finished task leaves the To Do list and shows up in the Done list, grouped by the day it was finished.
    A task: { id, title, note, cat, folder, due, done, doneAt, steps: [{ id, text, done }], createdAt, updatedAt } */
 
 let taskTimer = null;
@@ -99,7 +100,7 @@ function renderTodos() {
   if (!el) return;
   const items = state.todos.filter(inCat);
   const open = items.filter(t => !t.done).sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || a.createdAt - b.createdAt);
-  const done = items.filter(t => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  const done = items.filter(t => t.done);
   const folder = state.folder && state.folders.find(f => f.id === state.folder);
   const scope = folder ? folder.name : state.cat === 'all' ? '' : catName(state.cat);
 
@@ -116,11 +117,51 @@ function renderTodos() {
       <small>${done.length} of ${plural(items.length, 'task')} done${late ? ` · <span class="late">${late} overdue</span>` : ''}${soon ? ` · <span class="soon">${soon} due soon</span>` : ''}</small>
     </section>`;
   html += open.length ? open.map(todoRow).join('') : `<div class="empty compact"><b>Everything here is done</b></div>`;
-  if (done.length) {
-    html += `<button class="done-toggle ${state.showDone ? 'open' : ''}" data-act="toggle-done" aria-expanded="${state.showDone}">${I.back}<span>Done (${done.length})</span></button>`;
-    if (state.showDone) html += done.map(todoRow).join('');
+  if (done.length) html += `<button class="done-toggle" data-act="nav" data-section="done">${I.back}<span>See ${plural(done.length, 'finished task')} in Done</span></button>`;
+  el.innerHTML = html;
+}
+
+/* ---------- done list ---------- */
+const doneDay = t => ymd(new Date(t.doneAt || t.updatedAt));
+function dayLabel(ds) {
+  const d = daysUntil(ds);
+  return d === 0 ? 'Today' : d === -1 ? 'Yesterday' : fmtDate(ds);
+}
+
+function renderDone() {
+  const el = $('#done');
+  if (!el) return;
+  const items = state.todos.filter(t => t.done && inCat(t)).sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
+  const week = items.filter(t => daysUntil(doneDay(t)) > -7).length;
+  const cat = state.cat === 'all' ? 'life' : state.cat;
+  let html = `<form id="done-form" class="step-add done-add c-${cat}">
+      <input id="done-new" placeholder="Something you got done" maxlength="120" enterkeyhint="done" autocomplete="off" aria-label="Something you got done">
+      <button class="icon-btn" aria-label="Add to the Done list">${I.plus}</button>
+    </form>`;
+  if (!items.length) {
+    html += `<div class="empty"><b>Nothing here yet</b>Tasks you tick off in To Do land here. You can also write down anything else you got done, big or small.</div>`;
+  } else {
+    html += `<section class="progress-card"><div class="pc-head"><span>Done in the last 7 days</span><b>${week}</b></div>
+      <small>${plural(items.length, 'thing')} done in total${state.cat === 'all' && !state.folder ? '' : ' here'}</small></section>`;
+    let day = '';
+    for (const t of items) {
+      const d = doneDay(t);
+      if (d !== day) { day = d; html += `<h2 class="month">${dayLabel(d)}</h2>`; }
+      html += todoRow(t);
+    }
   }
   el.innerHTML = html;
+  $('#done-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const title = $('#done-new').value.trim();
+    if (!title) return;
+    const now = Date.now();
+    const t = { id: uid(), title, note: '', cat, folder: state.folder, due: '', done: true, doneAt: now, steps: [], createdAt: now, updatedAt: now };
+    await dbPut('todos', t);
+    state.todos.push(t);
+    renderDone();
+    $('#done-new').focus();
+  });
 }
 
 function todoRow(t) {
@@ -273,8 +314,8 @@ const todoActions = {
     t.updatedAt = Date.now();
     await dbPut('todos', t);
     renderHome();
+    toast(t.done ? 'Moved to your Done list' : 'Moved back to To Do');
   },
-  'toggle-done': () => { state.showDone = !state.showDone; renderTodos(); },
   'due-clear': () => { state.task.due = ''; $('#t-due').value = ''; renderDue(); scheduleTaskSave(); },
   'due-cal': () => {
     const t = state.task;
