@@ -3,15 +3,17 @@
 /* ================= helpers ================= */
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app');
+const LOCALE = 'en-US';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const pad = n => String(n).padStart(2, '0');
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const today = () => ymd(new Date());
 const parseDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
-const fmtDate = s => parseDate(s).toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-const fmtMonth = ym => parseDate(ym + '-01').toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
-const fmtDow = s => parseDate(s).toLocaleDateString('th-TH', { weekday: 'short' });
+const fmtDate = s => parseDate(s).toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fmtMonth = ym => parseDate(ym + '-01').toLocaleDateString(LOCALE, { month: 'long', year: 'numeric' });
+const fmtDow = s => parseDate(s).toLocaleDateString(LOCALE, { weekday: 'short' });
 const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -32,28 +34,45 @@ const I = {
   book: svg('<path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11"/>'),
   todo: svg('<path d="M4 7l2 2 3-4M4 16l2 2 3-4M13 7h7M13 17h7"/>'),
   tick: svg('<path d="M5 12l5 5 9-10"/>'),
+  folder: svg('<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>'),
+  more: svg('<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>'),
+  bell: svg('<path d="M6 16v-5a6 6 0 0112 0v5l2 2H4z"/><path d="M10 21a2 2 0 004 0"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
 };
-const MOODS = [['great', '😄', 'ดีมาก'], ['good', '🙂', 'ดี'], ['ok', '😐', 'เฉยๆ'], ['bad', '😔', 'แย่'], ['awful', '😢', 'แย่มาก']];
-const CATS = [['life', 'ชีวิตทั่วไป'], ['health', 'สุขภาพ'], ['invest', 'การลงทุน']];
-const catOf = e => CATS.some(c => c[0] === e.cat) ? e.cat : 'life'; // บันทึกเก่าที่ไม่มีหมวด = ชีวิตทั่วไป
-const catName = id => CATS.find(c => c[0] === id)[1];
-const inCat = e => state.cat === 'all' || catOf(e) === state.cat;
+const MOODS = [['great', '😄', 'Great'], ['good', '🙂', 'Good'], ['ok', '😐', 'Okay'], ['bad', '😔', 'Bad'], ['awful', '😢', 'Awful']];
 
-/* ================= database (IndexedDB, อยู่ในเครื่องเท่านั้น) ================= */
+/* ---------- categories and folders ----------
+   Categories are fixed. Folders are created by the user inside one category
+   and are shared by diary entries and to-do tasks: { id, cat, name }. */
+const CATS = [['life', 'Life'], ['health', 'Health'], ['invest', 'Investing'], ['work', 'Work']];
+const catOf = e => CATS.some(c => c[0] === e.cat) ? e.cat : 'life'; // items saved before categories existed count as Life
+const catName = id => CATS.find(c => c[0] === id)[1];
+const foldersOf = cat => state.folders.filter(f => f.cat === cat);
+const folderOf = e => state.folders.find(f => f.id === e.folder && f.cat === catOf(e));
+const inCat = e => (state.cat === 'all' || catOf(e) === state.cat) && (!state.folder || e.folder === state.folder);
+const saveFolders = () => dbPut('meta', state.folders, 'folders');
+
+// Small label on a card: shows whatever the current filter does not already say.
+function tagHTML(e) {
+  const f = folderOf(e);
+  const parts = [state.cat === 'all' && catName(catOf(e)), f && !state.folder && f.name].filter(Boolean);
+  return parts.length ? `<span class="tag c-${catOf(e)}">${esc(parts.join(' · '))}</span>` : '';
+}
+
+/* ================= database (IndexedDB, stays on this device) ================= */
 let db;
 function openDB() {
   return new Promise((res, rej) => {
     const r = indexedDB.open('diary', 2);
     r.onupgradeneeded = () => {
-      // สร้างเฉพาะที่ยังไม่มี เพื่อให้อัปเกรดจากเวอร์ชันเก่าได้โดยข้อมูลเดิมอยู่ครบ
+      // Only create what is missing, so upgrading keeps all existing data.
       const d = r.result;
       const stores = [
         ['entries', { keyPath: 'id' }],
-        ['attachments', { keyPath: 'id' }], // ข้อมูลไฟล์ + รูปย่อ
-        ['blobs'],                          // ตัวไฟล์จริง (ArrayBuffer)
-        ['meta'],
-        ['todos', { keyPath: 'id' }],       // เพิ่มใน v2
+        ['attachments', { keyPath: 'id' }], // file info + thumbnail
+        ['blobs'],                          // the file itself (ArrayBuffer)
+        ['meta'],                           // pin, settings, folders, lastNotified
+        ['todos', { keyPath: 'id' }],       // added in v2
       ];
       for (const [name, opts] of stores) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, opts);
     };
@@ -70,13 +89,15 @@ const dbDel = (s, k) => req(store(s, 'readwrite').delete(k));
 
 /* ================= state ================= */
 const state = {
-  view: 'home', section: 'diary', entries: [], atts: [], q: '', cat: 'all',
-  todos: [], task: null, taskSaved: false, showDone: false, calOpen: false, calMonth: today().slice(0, 7), day: null,
+  view: 'home', section: 'diary', entries: [], atts: [], q: '', cat: 'all', folder: '', folders: [],
+  todos: [], task: null, taskSaved: false, showDone: false,
+  calOpen: false, calMonth: today().slice(0, 7), day: null,
   cur: null, curSaved: false, busy: 0, viewer: null, pin: null, locked: false, hiddenAt: 0,
-  settings: { compress: true },
+  settings: { compress: true, notify: false, remindDays: 1 },
 };
 const attsOf = id => state.atts.filter(a => a.entryId === id).sort((a, b) => a.createdAt - b.createdAt);
 const sortEntries = () => state.entries.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+const saveSettings = () => dbPut('meta', state.settings, 'settings');
 
 /* ================= small UI pieces ================= */
 let toastTimer;
@@ -86,32 +107,64 @@ function toast(msg) {
   el.className = 'toast'; el.textContent = msg;
   document.body.append(el);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.remove(), 2800);
+  toastTimer = setTimeout(() => el.remove(), 3200);
 }
 
-function ask(title, text, okLabel = 'ตกลง') {
+function modal(html) {
+  const el = document.createElement('div');
+  el.className = 'modal';
+  el.innerHTML = html;
+  document.body.append(el);
+  return el;
+}
+
+function ask(title, text, okLabel = 'OK') {
   return new Promise(res => {
-    const el = document.createElement('div');
-    el.className = 'modal';
-    el.innerHTML = `<div class="sheet"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ''}
-      <div class="row end"><button class="btn ghost" data-v="0">ยกเลิก</button><button class="btn" data-v="1">${esc(okLabel)}</button></div></div>`;
+    const el = modal(`<div class="sheet"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ''}
+      <div class="row end"><button class="btn ghost" data-v="0">Cancel</button><button class="btn" data-v="1">${esc(okLabel)}</button></div></div>`);
     el.addEventListener('click', e => {
       const b = e.target.closest('[data-v]');
       if (b || e.target === el) { el.remove(); res(b?.dataset.v === '1'); }
     });
-    document.body.append(el);
+  });
+}
+
+// options: [[value, label, isDanger]]
+function choose(title, options) {
+  return new Promise(res => {
+    const el = modal(`<div class="sheet"><h3>${esc(title)}</h3>
+      ${options.map(o => `<button class="btn ghost block ${o[2] ? 'danger' : ''}" data-v="${o[0]}">${esc(o[1])}</button>`).join('')}
+      <button class="btn ghost block" data-v="">Cancel</button></div>`);
+    el.addEventListener('click', e => {
+      const b = e.target.closest('[data-v]');
+      if (b || e.target === el) { el.remove(); res(b?.dataset.v || null); }
+    });
+  });
+}
+
+function askText(title, value = '', placeholder = '') {
+  return new Promise(res => {
+    const el = modal(`<form class="sheet"><h3>${esc(title)}</h3>
+      <input class="text-input" maxlength="40" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="off" enterkeyhint="done" aria-label="${esc(title)}">
+      <div class="row end"><button type="button" class="btn ghost">Cancel</button><button class="btn">Save</button></div></form>`);
+    const inp = $('input', el);
+    inp.focus(); inp.select();
+    const done = v => { el.remove(); res(v); };
+    $('.ghost', el).onclick = () => done(null);
+    $('form', el).onsubmit = ev => {
+      ev.preventDefault();
+      const v = inp.value.trim();
+      if (v) done(v); else inp.focus();
+    };
   });
 }
 
 function askPin(title) {
   return new Promise(res => {
-    const el = document.createElement('div');
-    el.className = 'modal';
-    el.innerHTML = `<form class="sheet"><h3>${esc(title)}</h3>
-      <input class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="••••">
-      <p>ตัวเลข 4–8 หลัก</p>
-      <div class="row end"><button type="button" class="btn ghost">ยกเลิก</button><button class="btn">ตกลง</button></div></form>`;
-    document.body.append(el);
+    const el = modal(`<form class="sheet"><h3>${esc(title)}</h3>
+      <input class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="••••" aria-label="Passcode">
+      <p>4 to 8 digits</p>
+      <div class="row end"><button type="button" class="btn ghost">Cancel</button><button class="btn">OK</button></div></form>`);
     const inp = $('input', el);
     inp.focus();
     const done = v => { el.remove(); res(v); };
@@ -139,37 +192,52 @@ function render() {
 /* ---------- lock ---------- */
 function renderLock() {
   app.innerHTML = `<main class="lock">
-    <div class="lock-icon">${I.lock}</div><h1>ไดอารี่</h1>
+    <div class="lock-icon">${I.lock}</div><h1>Diary</h1>
     <form id="unlock">
-      <input class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="ใส่รหัส" aria-label="รหัสล็อก">
-      <button class="btn">ปลดล็อก</button><p id="lock-msg" class="err"></p>
+      <input class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="Passcode" aria-label="Passcode">
+      <button class="btn">Unlock</button><p id="lock-msg" class="err"></p>
     </form></main>`;
   const inp = $('.pin-input');
   inp.focus();
   $('#unlock').onsubmit = async e => {
     e.preventDefault();
-    if (await hashPin(inp.value, state.pin.salt) === state.pin.hash) { state.locked = false; render(); }
-    else { $('#lock-msg').textContent = 'รหัสไม่ถูกต้อง'; inp.value = ''; inp.focus(); }
+    if (await hashPin(inp.value, state.pin.salt) === state.pin.hash) { state.locked = false; render(); checkReminders(); }
+    else { $('#lock-msg').textContent = 'Wrong passcode'; inp.value = ''; inp.focus(); }
   };
 }
 
 /* ---------- home ---------- */
+function folderRow() {
+  if (state.cat === 'all') return '';
+  const fs = foldersOf(state.cat);
+  return `<nav class="tabs folders c-${state.cat}" aria-label="Folders">
+    ${fs.length ? `<button data-act="folder" data-id="" class="${state.folder ? '' : 'on'}">All ${catName(state.cat)}</button>` : ''}
+    ${fs.map(f => `<button data-act="folder" data-id="${f.id}" class="${state.folder === f.id ? 'on' : ''}">${I.folder}${esc(f.name)}</button>`).join('')}
+    <button data-act="folder-new" class="add">${I.plus}New folder</button>
+    ${state.folder ? `<button data-act="folder-menu" class="add" aria-label="Rename or delete this folder">${I.more}</button>` : ''}
+  </nav>`;
+}
+
 function renderHome() {
   const todo = state.section === 'todo';
   const openCount = state.todos.filter(t => !t.done).length;
+  const soon = dueSoon();
   app.innerHTML = `
-    <header class="top"><h1>${todo ? 'สิ่งที่ต้องทำ' : 'ไดอารี่'}</h1><div class="row">
-      ${todo ? '' : `<button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="ปฏิทิน">${I.cal}</button>`}
-      <button class="icon-btn" data-act="settings" aria-label="ตั้งค่า">${I.sliders}</button>
+    <header class="top"><h1>${todo ? 'To Do' : 'Diary'}</h1><div class="row">
+      ${todo ? '' : `<button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="Calendar">${I.cal}</button>`}
+      <button class="icon-btn" data-act="settings" aria-label="Settings">${I.sliders}</button>
     </div></header>
-    ${todo ? '' : `<div class="search">${I.search}<input type="search" id="q" placeholder="ค้นหาบันทึก" autocomplete="off" value="${esc(state.q)}"></div>`}
-    <nav class="tabs" aria-label="หมวด">${[['all', 'ทั้งหมด'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
+    ${!todo && soon.length ? `<button class="remind" data-act="nav" data-section="todo">${I.bell}<span>${remindSummary(soon)}</span>${I.back}</button>` : ''}
+    ${todo ? '' : `<div class="search">${I.search}<input type="search" id="q" placeholder="Search entries" autocomplete="off" value="${esc(state.q)}"></div>`}
+    <nav class="tabs" aria-label="Categories">${[['all', 'All'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
+    ${folderRow()}
     ${todo ? `<main id="todos" class="list"></main>` : `<div id="cal"></div><main id="list" class="list"></main>`}
-    <button class="fab" data-act="${todo ? 'new-task' : 'new'}" aria-label="${todo ? 'เพิ่มสิ่งที่ต้องทำ' : 'เขียนบันทึกใหม่'}">${I.plus}</button>
-    <nav class="bottom-nav" aria-label="เมนูหลัก">
-      <button data-act="nav" data-section="diary" class="${todo ? '' : 'on'}">${I.book}<span>ไดอารี่</span></button>
-      <button data-act="nav" data-section="todo" class="${todo ? 'on' : ''}">${I.todo}<span>สิ่งที่ต้องทำ${openCount ? ` <em>${openCount}</em>` : ''}</span></button>
+    <button class="fab" data-act="${todo ? 'new-task' : 'new'}" aria-label="${todo ? 'Add a task' : 'Write a new entry'}">${I.plus}</button>
+    <nav class="bottom-nav" aria-label="Main">
+      <button data-act="nav" data-section="diary" class="${todo ? '' : 'on'}">${I.book}<span>Diary</span></button>
+      <button data-act="nav" data-section="todo" class="${todo ? 'on' : ''}">${I.todo}<span>To Do${openCount ? ` <em>${openCount}</em>` : ''}</span></button>
     </nav>`;
+  updateBadge();
   if (todo) return renderTodos();
   $('#q').addEventListener('input', e => { state.q = e.target.value; renderList(); });
   renderCal();
@@ -193,11 +261,11 @@ function renderCal() {
   }
   el.innerHTML = `<section class="cal">
     <div class="cal-head">
-      <button class="icon-btn" data-act="cal-prev" aria-label="เดือนก่อนหน้า">${I.back}</button>
+      <button class="icon-btn" data-act="cal-prev" aria-label="Previous month">${I.back}</button>
       <strong>${fmtMonth(state.calMonth)}</strong>
-      <button class="icon-btn flip" data-act="cal-next" aria-label="เดือนถัดไป">${I.back}</button>
+      <button class="icon-btn flip" data-act="cal-next" aria-label="Next month">${I.back}</button>
     </div>
-    <div class="cal-grid dow">${['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map(d => `<span>${d}</span>`).join('')}</div>
+    <div class="cal-grid dow">${['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => `<span>${d}</span>`).join('')}</div>
     <div class="cal-grid">${cells}</div></section>`;
 }
 
@@ -209,14 +277,15 @@ function renderList() {
   if (state.day) items = items.filter(e => e.date === state.day);
   if (q) items = items.filter(e => (e.title + '\n' + e.text).toLowerCase().includes(q) || attsOf(e.id).some(a => a.name.toLowerCase().includes(q)));
 
+  const where = state.folder ? `in ${folderOf({ folder: state.folder, cat: state.cat })?.name || 'this folder'}` : state.cat !== 'all' ? `in ${catName(state.cat)}` : '';
   let html = '';
-  if (state.day) html += `<div class="chip-row"><span class="chip">${fmtDate(state.day)}<button data-act="day-clear" aria-label="ล้างตัวกรองวัน">${I.close}</button></span></div>`;
+  if (state.day) html += `<div class="chip-row"><span class="chip">${fmtDate(state.day)}<button data-act="day-clear" aria-label="Clear the day filter">${I.close}</button></span></div>`;
   if (!items.length) {
     html += q || state.day
-      ? `<div class="empty"><b>ไม่พบบันทึก</b>${state.day ? 'ยังไม่มีบันทึกของวันนี้ กด + เพื่อเขียน' : 'ลองค้นหาด้วยคำอื่น'}</div>`
-      : state.cat !== 'all'
-        ? `<div class="empty"><b>ยังไม่มีบันทึกในหมวด${catName(state.cat)}</b>กดปุ่ม + ด้านล่างเพื่อเขียนบันทึกในหมวดนี้</div>`
-        : `<div class="empty"><b>ยังไม่มีบันทึก</b>กดปุ่ม + ด้านล่างเพื่อเริ่มเขียนไดอารี่หน้าแรก</div>`;
+      ? `<div class="empty"><b>No entries found</b>${state.day ? 'Nothing written for this day yet. Tap + to write.' : 'Try a different search.'}</div>`
+      : where
+        ? `<div class="empty"><b>No entries ${esc(where)} yet</b>Tap + below to write one here.</div>`
+        : `<div class="empty"><b>No entries yet</b>Tap + below to write your first diary entry.</div>`;
   } else {
     let month = '';
     for (const e of items) {
@@ -237,16 +306,34 @@ function card(e) {
   return `<article class="card" data-act="open" data-id="${e.id}" role="button" tabindex="0">
     <div class="date"><b>${parseDate(e.date).getDate()}</b><span>${fmtDow(e.date)}</span></div>
     <div class="body">
-      <div class="card-head">${e.title ? `<h3>${esc(e.title)}</h3>` : text ? `<p class="solo" style="flex:1;margin:0">${esc(text)}</p>` : `<h3 style="color:var(--muted);font-weight:400">ไม่มีข้อความ</h3>`}
+      <div class="card-head">${e.title ? `<h3>${esc(e.title)}</h3>` : text ? `<p class="solo" style="flex:1;margin:0">${esc(text)}</p>` : `<h3 style="color:var(--muted);font-weight:400">No text</h3>`}
         ${mood ? `<span class="mood" title="${mood[2]}">${mood[1]}</span>` : ''}</div>
       ${e.title && text ? `<p>${esc(text)}</p>` : ''}
-      ${state.cat === 'all' ? `<span class="tag c-${catOf(e)}">${catName(catOf(e))}</span>` : ''}
+      ${tagHTML(e)}
       ${imgs.length ? `<div class="thumbs">${imgs.slice(0, 4).map(a => `<img src="${a.thumb}" alt="" loading="lazy">`).join('')}${imgs.length > 4 ? `<span class="more">+${imgs.length - 4}</span>` : ''}</div>` : ''}
-      ${files ? `<div class="files">${I.clip} ${files} ไฟล์แนบ</div>` : ''}
+      ${files ? `<div class="files">${I.clip} ${plural(files, 'attached file')}</div>` : ''}
     </div></article>`;
 }
 
-/* ---------- editor ---------- */
+/* ---------- category + folder picker (shared by the entry and task editors) ---------- */
+const editing = () => state.view === 'task'
+  ? { o: state.task, saved: state.taskSaved, save: scheduleTaskSave }
+  : { o: state.cur, saved: state.curSaved, save: scheduleSave };
+
+function pickerHTML(o) {
+  const fs = foldersOf(catOf(o));
+  return `<div class="cats" role="group" aria-label="Category">${CATS.map(c => `<button data-act="set-cat" data-cat="${c[0]}" class="c-${c[0]} ${catOf(o) === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</div>
+    <div class="cats folders c-${catOf(o)}" role="group" aria-label="Folder">
+      ${fs.map(f => `<button data-act="set-folder" data-id="${f.id}" class="${o.folder === f.id ? 'on' : ''}">${I.folder}${esc(f.name)}</button>`).join('')}
+      <button data-act="folder-new" class="add">${I.plus}New folder</button>
+    </div>`;
+}
+function renderPicker() {
+  const el = $('#picker');
+  if (el) el.innerHTML = pickerHTML(editing().o);
+}
+
+/* ---------- entry editor ---------- */
 let saveTimer = null;
 
 function openEditor(entry, saved) {
@@ -259,23 +346,23 @@ function renderEditor() {
   const e = state.cur;
   app.innerHTML = `
     <header class="top">
-      <button class="icon-btn" data-act="back" aria-label="กลับ">${I.back}</button>
+      <button class="icon-btn" data-act="back" aria-label="Back">${I.back}</button>
       <span id="saved" class="saved"></span>
-      <button class="icon-btn danger" data-act="del-entry" aria-label="ลบบันทึก">${I.trash}</button>
+      <button class="icon-btn danger" data-act="del-entry" aria-label="Delete this entry">${I.trash}</button>
     </header>
     <main class="editor">
       <label class="date-pick">${I.cal}<span id="date-label">${fmtDate(e.date)}</span>
-        <input type="date" id="e-date" value="${e.date}" aria-label="วันที่"></label>
-      <div class="cats" role="group" aria-label="หมวด">${CATS.map(c => `<button data-act="set-cat" data-cat="${c[0]}" class="c-${c[0]} ${catOf(e) === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</div>
+        <input type="date" id="e-date" value="${e.date}" aria-label="Date"></label>
+      <div id="picker">${pickerHTML(e)}</div>
       <div class="moods">${MOODS.map(m => `<button data-act="mood" data-mood="${m[0]}" class="${e.mood === m[0] ? 'on' : ''}" aria-label="${m[2]}" title="${m[2]}">${m[1]}</button>`).join('')}</div>
-      <input id="e-title" class="e-title" placeholder="หัวข้อ" maxlength="120" value="${esc(e.title)}">
-      <textarea id="e-text" placeholder="วันนี้เป็นอย่างไรบ้าง…">${esc(e.text)}</textarea>
+      <input id="e-title" class="e-title" placeholder="Title" maxlength="120" value="${esc(e.title)}">
+      <textarea id="e-text" placeholder="How was your day?">${esc(e.text)}</textarea>
       <div id="atts" class="atts"></div>
     </main>
     <footer class="toolbar">
-      <button data-act="camera">${I.camera}<span>ถ่ายรูป</span></button>
-      <button data-act="gallery">${I.image}<span>รูปจากเครื่อง</span></button>
-      <button data-act="file">${I.clip}<span>แนบไฟล์</span></button>
+      <button data-act="camera">${I.camera}<span>Take photo</span></button>
+      <button data-act="gallery">${I.image}<span>Photo library</span></button>
+      <button data-act="file">${I.clip}<span>Attach file</span></button>
     </footer>`;
   const ta = $('#e-text');
   const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
@@ -297,10 +384,10 @@ function renderAtts() {
   if (!el || !state.cur) return;
   el.innerHTML = attsOf(state.cur.id).map(a => a.thumb
     ? `<div class="att img" data-act="view" data-id="${a.id}"><img src="${a.thumb}" alt="${esc(a.name)}">
-        <button class="x" data-act="del-att" data-id="${a.id}" aria-label="ลบรูป">${I.close}</button></div>`
+        <button class="x" data-act="del-att" data-id="${a.id}" aria-label="Remove photo">${I.close}</button></div>`
     : `<div class="att file" data-act="view" data-id="${a.id}">${I.file}<div><b>${esc(a.name)}</b><small>${fmtSize(a.size)}</small></div>
-        <button class="x" data-act="del-att" data-id="${a.id}" aria-label="ลบไฟล์">${I.close}</button></div>`
-  ).join('') + (state.busy ? `<div class="att busy">กำลังเพิ่มไฟล์…</div>` : '');
+        <button class="x" data-act="del-att" data-id="${a.id}" aria-label="Remove file">${I.close}</button></div>`
+  ).join('') + (state.busy ? `<div class="att busy">Adding files…</div>` : '');
 }
 
 function scheduleSave() {
@@ -317,7 +404,7 @@ async function persist() {
   if (!state.curSaved) { state.entries.push(e); state.curSaved = true; }
   sortEntries();
   const s = $('#saved');
-  if (s) s.textContent = 'บันทึกแล้ว';
+  if (s) s.textContent = 'Saved';
 }
 
 async function removeEntry(e) {
@@ -367,7 +454,7 @@ async function addFiles(fileList, fromCamera) {
   let failed = 0;
   for (const file of files) {
     try {
-      if (file.size > BIG_FILE && !await ask('ไฟล์ขนาดใหญ่', `${file.name} มีขนาด ${fmtSize(file.size)} อาจทำให้พื้นที่เครื่องเต็มเร็ว ต้องการแนบต่อไหม`, 'แนบ')) continue;
+      if (file.size > BIG_FILE && !await ask('Large file', `${file.name} is ${fmtSize(file.size)} and may fill up your phone's storage quickly. Attach it anyway?`, 'Attach')) continue;
       let blob = file, name = file.name || 'file', type = file.type || 'application/octet-stream', thumb = '';
       if (type.startsWith('image/')) {
         try {
@@ -379,7 +466,7 @@ async function addFiles(fileList, fromCamera) {
             if (small && small.size < file.size) { blob = small; type = 'image/jpeg'; name = name.replace(/\.[^.]+$/, '') + '.jpg'; }
           }
           img.close?.();
-        } catch { /* เปิดเป็นรูปไม่ได้ (เช่น HEIC) เก็บเป็นไฟล์ธรรมดา */ }
+        } catch { /* cannot be decoded as an image (e.g. HEIC): keep it as a plain file */ }
         if (fromCamera) {
           const d = new Date();
           name = `photo-${ymd(d).replace(/-/g, '')}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${type === 'image/png' ? 'png' : 'jpg'}`;
@@ -395,7 +482,7 @@ async function addFiles(fileList, fromCamera) {
     }
   }
   state.busy--; renderAtts();
-  if (failed) toast(`เพิ่มไม่สำเร็จ ${failed} ไฟล์ (พื้นที่เครื่องอาจเต็ม)`);
+  if (failed) toast(`Could not add ${plural(failed, 'file')} (storage may be full)`);
 }
 
 async function getBlob(a) {
@@ -420,7 +507,7 @@ async function saveOut(blob, name) {
 async function openAttachment(id) {
   const a = state.atts.find(x => x.id === id);
   const blob = a && await getBlob(a);
-  if (!blob) return toast('ไม่พบไฟล์นี้');
+  if (!blob) return toast('This file could not be found');
   const kind = a.thumb ? 'img' : a.type.startsWith('video/') ? 'video' : a.type.startsWith('audio/') ? 'audio' : null;
   if (!kind) return saveOut(blob, a.name);
   const url = URL.createObjectURL(blob);
@@ -429,9 +516,9 @@ async function openAttachment(id) {
   const el = document.createElement('div');
   el.className = 'viewer'; el.id = 'viewer';
   el.innerHTML = `<div class="viewer-bar">
-      <button class="icon-btn" data-act="back" aria-label="ปิด">${I.close}</button>
+      <button class="icon-btn" data-act="back" aria-label="Close">${I.close}</button>
       <span>${esc(a.name)}</span>
-      <button class="icon-btn" data-act="save-att" aria-label="บันทึกไฟล์ลงเครื่อง">${I.download}</button></div>
+      <button class="icon-btn" data-act="save-att" aria-label="Save file to phone">${I.download}</button></div>
     <div class="viewer-body">${kind === 'img' ? `<img src="${url}" alt="${esc(a.name)}">` : kind === 'video' ? `<video src="${url}" controls playsinline></video>` : `<audio src="${url}" controls></audio>`}</div>`;
   document.body.append(el);
 }
@@ -443,55 +530,64 @@ function closeViewer() {
 
 /* ---------- settings ---------- */
 function renderSettings() {
+  const days = state.settings.remindDays;
   app.innerHTML = `
-    <header class="top"><div class="row"><button class="icon-btn" data-act="back" aria-label="กลับ">${I.back}</button><h1>ตั้งค่า</h1></div></header>
+    <header class="top"><div class="row"><button class="icon-btn" data-act="back" aria-label="Back">${I.back}</button><h1>Settings</h1></div></header>
     <main class="settings">
-      <section><h2>ความเป็นส่วนตัว</h2>
-        <div class="set-row"><span>รหัสล็อกแอป</span>
-          ${state.pin ? `<div class="row end"><button class="btn ghost" data-act="pin-set">เปลี่ยน</button><button class="btn ghost" data-act="pin-off">ปิด</button></div>` : `<button class="btn" data-act="pin-set">ตั้งรหัส</button>`}</div>
-        <p>รหัสใช้กันคนอื่นเปิดแอปดู ถ้าลืมรหัสจะกู้คืนไม่ได้ ควรสำรองข้อมูลไว้ก่อน</p></section>
-      <section><h2>รูปภาพ</h2>
-        <div class="set-row"><span>ย่อขนาดรูปเพื่อประหยัดพื้นที่</span>
-          <input type="checkbox" class="switch" id="s-compress" ${state.settings.compress ? 'checked' : ''} aria-label="ย่อขนาดรูป"></div>
-        <p>รูปใหญ่จะถูกย่อให้ด้านยาวไม่เกิน ${MAX_SIDE} พิกเซล ปิดไว้ถ้าต้องการเก็บไฟล์ต้นฉบับ</p></section>
-      <section><h2>สำรองข้อมูล</h2>
-        <div class="set-row"><span>ส่งออกทั้งหมดเป็นไฟล์</span><button class="btn" data-act="export">ส่งออก</button></div>
-        <div class="set-row"><span>นำเข้าจากไฟล์สำรอง</span><button class="btn ghost" data-act="import">นำเข้า</button></div>
-        <p>ข้อมูลทั้งหมดอยู่ในโทรศัพท์เครื่องนี้เท่านั้น ถ้าล้างข้อมูลเบราว์เซอร์ ลบแอป หรือเปลี่ยนเครื่อง ข้อมูลจะหาย ควรส่งออกเก็บไว้เป็นระยะ</p></section>
-      <section><h2>ข้อมูลในเครื่อง</h2>
-        <div class="set-row"><span>บันทึก</span><span>${state.entries.length} รายการ</span></div>
-        <div class="set-row"><span>สิ่งที่ต้องทำ</span><span>${state.todos.length} งาน</span></div>
-        <div class="set-row"><span>รูปและไฟล์แนบ</span><span>${state.atts.length} ไฟล์ (${fmtSize(state.atts.reduce((n, a) => n + a.size, 0))})</span></div>
-        <div class="set-row"><span>การเก็บถาวร</span><span id="s-persist">…</span></div></section>
+      <section><h2>Reminders</h2>
+        <div class="set-row"><span>Remind me about due tasks</span>
+          <select class="select" id="s-days" aria-label="When to remind">
+            ${[[0, 'On the due date'], [1, '1 day before'], [2, '2 days before'], [3, '3 days before'], [7, '1 week before']].map(o => `<option value="${o[0]}" ${days === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}
+          </select></div>
+        <div class="set-row"><span>Phone notification</span>
+          <input type="checkbox" class="switch" id="s-notify" ${state.settings.notify ? 'checked' : ''} aria-label="Phone notification"></div>
+        <p>Tasks that are due soon are always highlighted in the app. With notifications on, you also get one alert a day and a number on the app icon, but only when you open the app. For an alert while the app is closed, open a task and tap "Add to Calendar".</p></section>
+      <section><h2>Privacy</h2>
+        <div class="set-row"><span>Passcode lock</span>
+          ${state.pin ? `<div class="row end"><button class="btn ghost" data-act="pin-set">Change</button><button class="btn ghost" data-act="pin-off">Turn off</button></div>` : `<button class="btn" data-act="pin-set">Set passcode</button>`}</div>
+        <p>The passcode stops other people from opening the app. A forgotten passcode cannot be recovered, so export a backup first.</p></section>
+      <section><h2>Photos</h2>
+        <div class="set-row"><span>Shrink photos to save space</span>
+          <input type="checkbox" class="switch" id="s-compress" ${state.settings.compress ? 'checked' : ''} aria-label="Shrink photos"></div>
+        <p>Large photos are resized so the long side is at most ${MAX_SIDE} pixels. Turn this off to keep the original files.</p></section>
+      <section><h2>Backup</h2>
+        <div class="set-row"><span>Export everything to a file</span><button class="btn" data-act="export">Export</button></div>
+        <div class="set-row"><span>Import from a backup file</span><button class="btn ghost" data-act="import">Import</button></div>
+        <p>Everything is stored only on this phone. Clearing browser data, deleting the app or changing phones erases it, so export a backup from time to time.</p></section>
+      <section><h2>On this phone</h2>
+        <div class="set-row"><span>Diary entries</span><span>${state.entries.length}</span></div>
+        <div class="set-row"><span>Tasks</span><span>${state.todos.length}</span></div>
+        <div class="set-row"><span>Folders</span><span>${state.folders.length}</span></div>
+        <div class="set-row"><span>Photos and files</span><span>${state.atts.length} (${fmtSize(state.atts.reduce((n, a) => n + a.size, 0))})</span></div>
+        <div class="set-row"><span>Protected storage</span><span id="s-persist">…</span></div></section>
     </main>`;
-  $('#s-compress').addEventListener('change', async e => {
-    state.settings.compress = e.target.checked;
-    await dbPut('meta', state.settings, 'settings');
-  });
+  $('#s-compress').addEventListener('change', async e => { state.settings.compress = e.target.checked; await saveSettings(); });
+  $('#s-days').addEventListener('change', async e => { state.settings.remindDays = +e.target.value; await saveSettings(); updateBadge(); });
+  $('#s-notify').addEventListener('change', async e => { e.target.checked = await setNotify(e.target.checked); });
   navigator.storage?.persisted?.().then(ok => {
     const el = $('#s-persist');
-    if (el) el.textContent = ok ? 'เปิดอยู่' : 'ยังไม่เปิด (ติดตั้งแอปลงหน้าจอหลัก)';
+    if (el) el.textContent = ok ? 'On' : 'Off (add the app to your Home Screen)';
   });
 }
 
 async function setPin() {
-  const a = await askPin(state.pin ? 'ตั้งรหัสใหม่' : 'ตั้งรหัสล็อก');
+  const a = await askPin(state.pin ? 'New passcode' : 'Set a passcode');
   if (!a) return;
-  const b = await askPin('ใส่รหัสอีกครั้งเพื่อยืนยัน');
+  const b = await askPin('Enter the passcode again');
   if (b === null) return;
-  if (a !== b) return toast('รหัสสองครั้งไม่ตรงกัน');
+  if (a !== b) return toast('The two passcodes did not match');
   const salt = uid();
   state.pin = { salt, hash: await hashPin(a, salt) };
   await dbPut('meta', state.pin, 'pin');
-  toast('ตั้งรหัสล็อกแล้ว'); render();
+  toast('Passcode lock is on'); render();
 }
 async function removePin() {
-  const a = await askPin('ใส่รหัสปัจจุบันเพื่อปิดการล็อก');
+  const a = await askPin('Enter your current passcode');
   if (!a) return;
-  if (await hashPin(a, state.pin.salt) !== state.pin.hash) return toast('รหัสไม่ถูกต้อง');
+  if (await hashPin(a, state.pin.salt) !== state.pin.hash) return toast('Wrong passcode');
   state.pin = null;
   await dbDel('meta', 'pin');
-  toast('ปิดรหัสล็อกแล้ว'); render();
+  toast('Passcode lock is off'); render();
 }
 
 /* ---------- backup ---------- */
@@ -503,8 +599,9 @@ const toB64 = blob => new Promise((res, rej) => {
 });
 
 async function exportAll() {
-  toast('กำลังเตรียมไฟล์สำรอง…');
-  const parts = [`{"app":"diary","version":1,"exportedAt":${JSON.stringify(new Date().toISOString())},"entries":${JSON.stringify(state.entries)},"todos":${JSON.stringify(state.todos)},"attachments":[`];
+  toast('Preparing the backup file…');
+  const head = { app: 'diary', version: 2, exportedAt: new Date().toISOString(), folders: state.folders, entries: state.entries, todos: state.todos };
+  const parts = [JSON.stringify(head).slice(0, -1) + ',"attachments":['];
   let first = true;
   for (const a of state.atts) {
     const buf = await dbGet('blobs', a.id);
@@ -518,14 +615,21 @@ async function exportAll() {
 
 async function importFile(file) {
   let data;
-  try { data = JSON.parse(await file.text()); } catch { return toast('อ่านไฟล์ไม่ได้'); }
-  if (data?.app !== 'diary' || !Array.isArray(data.entries)) return toast('ไฟล์นี้ไม่ใช่ไฟล์สำรองของไดอารี่');
-  if (!await ask('นำเข้าข้อมูล', `พบ ${data.entries.length} บันทึก ${data.todos?.length || 0} งาน และ ${data.attachments?.length || 0} ไฟล์แนบ รายการที่ซ้ำกันจะถูกแทนที่ด้วยข้อมูลจากไฟล์`, 'นำเข้า')) return;
-  toast('กำลังนำเข้า…');
+  try { data = JSON.parse(await file.text()); } catch { return toast('This file could not be read'); }
+  if (data?.app !== 'diary' || !Array.isArray(data.entries)) return toast('This is not a Diary backup file');
+  if (!await ask('Import backup', `Found ${plural(data.entries.length, 'entry').replace('entrys', 'entries')}, ${plural(data.todos?.length || 0, 'task')} and ${plural(data.attachments?.length || 0, 'attached file')}. Items that already exist are replaced by the ones in the file.`, 'Import')) return;
+  toast('Importing…');
   try {
+    for (const f of Array.isArray(data.folders) ? data.folders : []) {
+      if (!f?.id || !CATS.some(c => c[0] === f.cat) || !String(f.name || '').trim()) continue;
+      const clean = { id: String(f.id), cat: f.cat, name: String(f.name).trim().slice(0, 40) };
+      const i = state.folders.findIndex(x => x.id === clean.id);
+      if (i >= 0) state.folders[i] = clean; else state.folders.push(clean);
+    }
+    await saveFolders();
     for (const e of data.entries) {
       if (!e?.id || !/^\d{4}-\d{2}-\d{2}$/.test(e.date)) continue;
-      await dbPut('entries', { id: String(e.id), date: e.date, cat: catOf(e), title: String(e.title || ''), text: String(e.text || ''), mood: String(e.mood || ''), createdAt: +e.createdAt || Date.now(), updatedAt: +e.updatedAt || Date.now() });
+      await dbPut('entries', { id: String(e.id), date: e.date, cat: catOf(e), folder: String(e.folder || ''), title: String(e.title || ''), text: String(e.text || ''), mood: String(e.mood || ''), createdAt: +e.createdAt || Date.now(), updatedAt: +e.updatedAt || Date.now() });
     }
     for (const raw of Array.isArray(data.todos) ? data.todos : []) {
       const t = cleanTodo(raw);
@@ -540,22 +644,75 @@ async function importFile(file) {
     }
   } catch (err) {
     console.error(err);
-    toast('นำเข้าไม่ครบ พื้นที่เครื่องอาจเต็ม');
+    toast('Import did not finish. Storage may be full.');
   }
   await loadAll();
   render();
-  toast('นำเข้าเรียบร้อย');
+  toast('Import finished');
+}
+
+/* ---------- folders ---------- */
+async function newFolder() {
+  const inEditor = state.view !== 'home';
+  const cat = inEditor ? catOf(editing().o) : state.cat;
+  if (cat === 'all') return;
+  const name = await askText(`New folder in ${catName(cat)}`, '', 'Folder name');
+  if (!name) return;
+  const dup = foldersOf(cat).find(f => f.name.toLowerCase() === name.toLowerCase());
+  const f = dup || { id: uid(), cat, name };
+  if (!dup) { state.folders.push(f); await saveFolders(); }
+  if (inEditor) {
+    const ed = editing();
+    ed.o.folder = f.id; renderPicker();
+    if (ed.saved) ed.save();
+  } else {
+    state.folder = f.id; renderHome();
+  }
+}
+
+async function folderMenu() {
+  const f = state.folders.find(x => x.id === state.folder);
+  if (!f) return;
+  const act = await choose(f.name, [['rename', 'Rename folder'], ['delete', 'Delete folder', true]]);
+  if (act === 'rename') {
+    const name = await askText('Rename folder', f.name, 'Folder name');
+    if (!name) return;
+    f.name = name;
+    await saveFolders();
+    renderHome();
+  } else if (act === 'delete') {
+    const used = state.entries.filter(e => e.folder === f.id).length + state.todos.filter(t => t.folder === f.id).length;
+    if (!await ask(`Delete "${f.name}"?`, used ? `The ${plural(used, 'item')} inside ${used === 1 ? 'is' : 'are'} kept and moved back to ${catName(f.cat)}.` : 'This folder is empty.', 'Delete')) return;
+    for (const e of state.entries.filter(x => x.folder === f.id)) { e.folder = ''; await dbPut('entries', e); }
+    for (const t of state.todos.filter(x => x.folder === f.id)) { t.folder = ''; await dbPut('todos', t); }
+    state.folders = state.folders.filter(x => x !== f);
+    await saveFolders();
+    state.folder = '';
+    renderHome();
+  }
 }
 
 /* ================= events ================= */
 const actions = {
   ...todoActions,
-  new: () => { const now = Date.now(); openEditor({ id: uid(), date: state.day || today(), cat: state.cat === 'all' ? 'life' : state.cat, title: '', text: '', mood: '', createdAt: now, updatedAt: now }, false); },
-  tab: el => { state.cat = el.dataset.cat; renderHome(); },
+  new: () => { const now = Date.now(); openEditor({ id: uid(), date: state.day || today(), cat: state.cat === 'all' ? 'life' : state.cat, folder: state.folder, title: '', text: '', mood: '', createdAt: now, updatedAt: now }, false); },
+  tab: el => { state.cat = el.dataset.cat; state.folder = ''; renderHome(); },
+  folder: el => { state.folder = el.dataset.id; renderHome(); },
+  'folder-new': newFolder,
+  'folder-menu': folderMenu,
   'set-cat': el => {
-    const e = state.cur; e.cat = el.dataset.cat;
-    document.querySelectorAll('.cats button').forEach(b => b.classList.toggle('on', b.dataset.cat === e.cat));
-    if (state.curSaved) scheduleSave();
+    const ed = editing();
+    if (catOf(ed.o) !== el.dataset.cat) ed.o.folder = ''; // folders belong to one category
+    ed.o.cat = el.dataset.cat;
+    renderPicker();
+    if (state.view === 'task') renderSteps();
+    if (ed.saved) ed.save();
+  },
+  'set-folder': el => {
+    const ed = editing();
+    ed.o.folder = ed.o.folder === el.dataset.id ? '' : el.dataset.id;
+    renderPicker();
+    if (ed.saved) ed.save();
   },
   open: el => { const e = state.entries.find(x => x.id === el.dataset.id); if (e) openEditor(e, true); },
   back: () => history.back(),
@@ -577,7 +734,7 @@ const actions = {
   'save-att': () => state.viewer && saveOut(state.viewer.blob, state.viewer.a.name),
   'del-att': async el => {
     const a = state.atts.find(x => x.id === el.dataset.id);
-    if (!a || !await ask('ลบไฟล์นี้?', a.name, 'ลบ')) return;
+    if (!a || !await ask('Remove this file?', a.name, 'Remove')) return;
     await dbDel('attachments', a.id); await dbDel('blobs', a.id);
     state.atts = state.atts.filter(x => x !== a);
     renderAtts();
@@ -585,7 +742,7 @@ const actions = {
   'del-entry': async () => {
     const e = state.cur;
     if (state.curSaved) {
-      if (!await ask('ลบบันทึกนี้?', 'ข้อความ รูป และไฟล์แนบของบันทึกนี้จะถูกลบถาวร', 'ลบ')) return;
+      if (!await ask('Delete this entry?', 'Its text, photos and attached files will be permanently deleted.', 'Delete')) return;
       clearTimeout(saveTimer); saveTimer = null;
       await removeEntry(e);
     }
@@ -633,6 +790,8 @@ document.addEventListener('visibilitychange', async () => {
     await leaveEditor();
     await leaveTask();
     state.view = 'home'; state.locked = true; render();
+  } else if (!state.locked) {
+    checkReminders();
   }
 });
 window.addEventListener('pagehide', () => { if (saveTimer) persist(); if (taskTimer) saveTask(); });
@@ -641,6 +800,7 @@ window.addEventListener('pagehide', () => { if (saveTimer) persist(); if (taskTi
 async function loadAll() {
   state.entries = await dbAll('entries');
   state.atts = await dbAll('attachments');
+  state.folders = await dbGet('meta', 'folders') || [];
   state.todos = (await dbAll('todos')).map(cleanTodo).filter(Boolean);
   sortEntries();
 }
@@ -653,7 +813,7 @@ async function loadAll() {
     Object.assign(state.settings, await dbGet('meta', 'settings') || {});
   } catch (err) {
     console.error(err);
-    app.innerHTML = `<div class="empty"><b>เปิดที่เก็บข้อมูลไม่ได้</b>เบราว์เซอร์นี้อาจอยู่ในโหมดส่วนตัว ลองเปิดในโหมดปกติ</div>`;
+    app.innerHTML = `<div class="empty"><b>Storage could not be opened</b>This browser may be in private mode. Try again in a normal window.</div>`;
     return;
   }
   state.locked = !!state.pin;
@@ -661,5 +821,6 @@ async function loadAll() {
   render();
   navigator.storage?.persist?.();
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
-  if ('serviceWorker' in navigator && !local) navigator.serviceWorker.register('sw.js').catch(() => { });
+  if ('serviceWorker' in navigator && !local) await navigator.serviceWorker.register('sw.js').catch(() => { });
+  if (!state.locked) checkReminders();
 })();

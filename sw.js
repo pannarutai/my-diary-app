@@ -1,5 +1,5 @@
-// ทำให้แอปเปิดได้แม้ไม่มีอินเทอร์เน็ต — เปลี่ยนเลขเวอร์ชันเมื่อแก้ไฟล์แอป
-const CACHE = 'diary-v3';
+// Lets the app open without internet. Bump the version number whenever app files change.
+const CACHE = 'diary-v4';
 const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,7 @@ self.addEventListener('activate', e => {
   );
 });
 
-// ตอบจากแคชก่อน แล้วอัปเดตแคชจากเครือข่ายเบื้องหลัง
+// Answer from the cache first, then refresh the cache from the network in the background.
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
@@ -25,5 +25,14 @@ self.addEventListener('fetch', e => {
       return res;
     }).catch(() => hit);
     return hit || net;
+  }));
+});
+
+// Tapping a reminder notification brings the app to the front.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const open = list.find(c => 'focus' in c);
+    return open ? open.focus() : self.clients.openWindow('./');
   }));
 });

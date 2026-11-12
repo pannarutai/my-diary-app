@@ -1,7 +1,7 @@
 {
-  "name": "ไดอารี่ของฉัน",
-  "short_name": "ไดอารี่",
-  "lang": "th",
+  "name": "My Diary",
+  "short_name": "Diary",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

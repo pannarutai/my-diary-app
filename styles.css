@@ -7,6 +7,7 @@
   --accent: #b85c38;
   --accent-ink: #fff;
   --danger: #b3372f;
+  --warn: #a8690a;
   --shadow: 0 1px 2px rgba(60, 40, 20, .06), 0 4px 14px rgba(60, 40, 20, .06);
   color-scheme: light dark;
 }
@@ -20,6 +21,7 @@
     --accent: #e08a63;
     --accent-ink: #1b1814;
     --danger: #ef7d74;
+    --warn: #e3b34f;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3);
   }
 }
@@ -64,19 +66,21 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 }
 .search input:focus { border-color: var(--accent); }
 
-/* หมวด: สีประจำหมวด */
+/* category colours */
 .c-all { --c: var(--ink); }
 .c-life { --c: var(--accent); }
 .c-health { --c: #2e8b57; }
 .c-invest { --c: #2f6fb5; }
+.c-work { --c: #7d4fb3; }
 @media (prefers-color-scheme: dark) {
   .c-health { --c: #6cc893; }
   .c-invest { --c: #7fb2ee; }
+  .c-work { --c: #b99ae8; }
 }
-.tabs { display: flex; gap: 6px; padding: 2px 16px 8px; overflow-x: auto; scrollbar-width: none; }
+.tabs { display: flex; gap: 5px; padding: 2px 12px 8px; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button, .cats button {
-  flex: none; height: 38px; padding: 0 10px; border-radius: 999px; white-space: nowrap; font-size: 14px;
+  flex: none; height: 38px; padding: 0 9px; border-radius: 999px; white-space: nowrap; font-size: 14px;
   border: 1px solid var(--line); background: var(--card); color: var(--muted);
   display: inline-flex; align-items: center; gap: 6px;
 }
@@ -138,6 +142,29 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .fab svg { width: 28px; height: 28px; stroke-width: 2.2; }
 .fab:active { transform: scale(.95); }
 
+/* ---------- folders ---------- */
+.folders { padding-top: 0; }
+.cats.folders { margin-top: 6px; }
+.folders button::before { display: none; }
+.folders button svg { width: 16px; height: 16px; }
+.folders button.add { border-style: dashed; color: var(--c, var(--accent)); background: none; }
+
+/* ---------- reminder banner ---------- */
+.remind {
+  display: flex; align-items: center; gap: 10px; width: calc(100% - 32px); min-height: 46px; margin: 0 16px 10px; padding: 8px 12px;
+  border-radius: 12px; text-align: left; font-size: 14.5px; font-weight: 600;
+  background: color-mix(in srgb, var(--warn) 14%, var(--card)); border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+.remind span { flex: 1; }
+.remind svg:first-child { color: var(--warn); }
+.remind svg:last-child { width: 16px; height: 16px; transform: scaleX(-1); color: var(--muted); }
+
+.text-input { width: 100%; height: 48px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); outline: none; }
+.text-input:focus, .select:focus { border-color: var(--accent); }
+.select { height: 44px; max-width: 58%; padding: 0 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); outline: none; }
+.btn.block { width: 100%; }
+.btn.danger { color: var(--danger); }
+
 /* ---------- bottom nav ---------- */
 .bottom-nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; justify-content: center;
@@ -160,6 +187,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .bar i { display: block; height: 100%; border-radius: 999px; background: var(--c, var(--accent)); transition: width .25s; }
 .bar.sm { height: 6px; margin: 6px 0 2px; }
 .late { color: var(--danger); font-weight: 600; }
+.soon { color: var(--warn); font-weight: 600; }
 
 .todo { display: flex; align-items: flex-start; gap: 4px; padding: 6px 12px 6px 4px; margin-bottom: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
 .todo .body { flex: 1; min-width: 0; padding: 9px 0; cursor: pointer; }
@@ -177,7 +205,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .done-toggle.open svg { transform: rotate(270deg); }
 .empty.compact { padding: 20px; }
 
-.due-row { margin-top: 6px; gap: 8px; }
+.due-row { margin-top: 6px; gap: 2px; flex-wrap: wrap; }
 .link { white-space: nowrap; min-height: 44px; padding: 0 8px; color: var(--muted); font-size: 14px; text-decoration: underline; }
 .sub { margin: 16px 0 4px; font-size: 14px; font-weight: 600; color: var(--muted); }
 .mark-done { display: flex; align-items: center; gap: 2px; width: 100%; min-height: 44px; margin: 8px 0 -8px -10px; text-align: left; font-size: 15px; }

@@ -1,16 +1,97 @@
 'use strict';
-/* ================= To Do List =================
-   โหลดก่อน app.js — ไฟล์นี้มีแต่ฟังก์ชัน ใช้ตัวแปรร่วม (state, I, $ ฯลฯ) จาก app.js ตอนถูกเรียก
-   งานหนึ่งชิ้น: { id, title, note, cat, due, done, doneAt, steps: [{ id, text, done }], createdAt, updatedAt } */
+/* ================= To Do list + reminders =================
+   Loaded before app.js. This file only defines functions; they use the shared
+   globals from app.js (state, I, $, ...) when they are called.
+   A task: { id, title, note, cat, folder, due, done, doneAt, steps: [{ id, text, done }], createdAt, updatedAt } */
 
 let taskTimer = null;
 
-// ความคืบหน้าของงาน 0–100: งานที่เสร็จ = 100, ไม่เช่นนั้นคิดจากสัดส่วนขั้นตอนย่อยที่ทำแล้ว
+// Progress of one task, 0-100: a finished task is 100, otherwise the share of sub-steps done.
 function todoPct(t) {
   if (t.done) return 100;
   return t.steps.length ? Math.round(t.steps.filter(s => s.done).length / t.steps.length * 100) : 0;
 }
-const fmtShort = s => parseDate(s).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+const fmtShort = s => parseDate(s).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' });
+
+/* ---------- reminders ---------- */
+const daysUntil = due => Math.round((parseDate(due) - parseDate(today())) / 864e5);
+const isSoon = t => !t.done && !!t.due && daysUntil(t.due) <= state.settings.remindDays; // includes overdue
+const dueSoon = () => state.todos.filter(isSoon).sort((a, b) => a.due.localeCompare(b.due));
+
+function dueText(t) {
+  const d = daysUntil(t.due);
+  if (d < 0) return `Overdue by ${plural(-d, 'day')}`;
+  if (d === 0) return 'Due today';
+  if (d === 1) return 'Due tomorrow';
+  if (d <= 7) return `Due in ${d} days`;
+  return `Due ${fmtShort(t.due)}`;
+}
+const dueClass = t => t.done ? '' : daysUntil(t.due) < 0 ? 'late' : isSoon(t) ? 'soon' : '';
+
+function remindSummary(list) {
+  const over = list.filter(t => daysUntil(t.due) < 0).length, soon = list.length - over;
+  return [over && `${plural(over, 'task')} overdue`, soon && `${plural(soon, 'task')} due soon`].filter(Boolean).join(' · ');
+}
+
+// Number on the app icon (only where the phone supports it and notifications are on).
+function updateBadge() {
+  const n = state.settings.notify ? dueSoon().length : 0;
+  try { if (n) navigator.setAppBadge?.(n); else navigator.clearAppBadge?.(); } catch { }
+}
+
+async function setNotify(on) {
+  if (on) {
+    if (!('Notification' in window)) {
+      toast('Notifications are not available here. On iPhone, add the app to your Home Screen first.');
+      return false;
+    }
+    if (await Notification.requestPermission() !== 'granted') {
+      toast('Notifications are blocked. Allow them for this app in your phone settings.');
+      return false;
+    }
+  }
+  state.settings.notify = on;
+  await saveSettings();
+  updateBadge();
+  if (on) checkReminders(true);
+  return on;
+}
+
+// Shows at most one notification a day. A web app cannot wake itself up, so this
+// runs when the app is opened or brought back to the front.
+async function checkReminders(force) {
+  updateBadge();
+  if (!state.settings.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const list = dueSoon();
+  if (!list.length) return;
+  const day = today();
+  if (!force && await dbGet('meta', 'lastNotified') === day) return;
+  await dbPut('meta', day, 'lastNotified');
+  const title = remindSummary(list).replace(/^./, c => c.toUpperCase());
+  // With a passcode set, keep task names off the lock screen.
+  const body = state.pin
+    ? 'Open Diary to see them.'
+    : list.slice(0, 3).map(t => `${t.title || 'Untitled task'}: ${dueText(t).toLowerCase()}`).join('\n') + (list.length > 3 ? `\n…and ${list.length - 3} more` : '');
+  const opts = { body, icon: 'icons/icon-192.png', tag: 'due-tasks' };
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg) await reg.showNotification(title, opts); else new Notification(title, opts);
+  } catch (err) { console.warn(err); }
+}
+
+// Calendar file with an alarm, so the phone's own calendar can alert while this app is closed.
+function taskICS(t) {
+  const e = s => String(s).replace(/\\/g, '\\\\').replace(/([,;])/g, '\\$1').replace(/\r?\n/g, '\\n');
+  const day = t.due.replace(/-/g, '');
+  const next = ymd(new Date(parseDate(t.due).getTime() + 26 * 36e5)).replace(/-/g, '');
+  const stamp = new Date().toISOString().replace(/[-:]|\.\d+/g, '');
+  const hours = state.settings.remindDays * 24 - 9; // alarm at 09:00, remindDays before the due date
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Diary//To Do//EN', 'BEGIN:VEVENT',
+    `UID:${t.id}@diary-app`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${day}`, `DTEND;VALUE=DATE:${next}`,
+    `SUMMARY:${e(t.title || 'Untitled task')}`, t.note ? `DESCRIPTION:${e(t.note)}` : '',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${e(t.title || 'Task due')}`, `TRIGGER:${hours > 0 ? `-PT${hours}H` : `PT${-hours}H`}`, 'END:VALARM',
+    'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
+}
 
 /* ---------- list ---------- */
 function renderTodos() {
@@ -19,21 +100,24 @@ function renderTodos() {
   const items = state.todos.filter(inCat);
   const open = items.filter(t => !t.done).sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || a.createdAt - b.createdAt);
   const done = items.filter(t => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  const folder = state.folder && state.folders.find(f => f.id === state.folder);
+  const scope = folder ? folder.name : state.cat === 'all' ? '' : catName(state.cat);
 
   if (!items.length) {
-    el.innerHTML = `<div class="empty"><b>ยังไม่มีสิ่งที่ต้องทำ${state.cat === 'all' ? '' : 'ในหมวด' + catName(state.cat)}</b>กดปุ่ม + ด้านล่างเพื่อเพิ่มงานแรก</div>`;
+    el.innerHTML = `<div class="empty"><b>No tasks${scope ? ` in ${esc(scope)}` : ''} yet</b>Tap + below to add ${scope ? 'one here' : 'your first task'}.</div>`;
     return;
   }
   const pct = Math.round(items.reduce((n, t) => n + todoPct(t), 0) / items.length);
-  const late = open.filter(t => t.due && t.due < today()).length;
+  const late = open.filter(t => t.due && daysUntil(t.due) < 0).length;
+  const soon = open.filter(isSoon).length - late;
   let html = `<section class="progress-card c-${state.cat}">
-      <div class="pc-head"><span>ความคืบหน้า${state.cat === 'all' ? 'ทั้งหมด' : 'หมวด' + catName(state.cat)}</span><b>${pct}%</b></div>
+      <div class="pc-head"><span>${scope ? `${esc(scope)} progress` : 'Overall progress'}</span><b>${pct}%</b></div>
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
-      <small>เสร็จแล้ว ${done.length} จาก ${items.length} งาน${late ? ` · <span class="late">เลยกำหนด ${late} งาน</span>` : ''}</small>
+      <small>${done.length} of ${plural(items.length, 'task')} done${late ? ` · <span class="late">${late} overdue</span>` : ''}${soon ? ` · <span class="soon">${soon} due soon</span>` : ''}</small>
     </section>`;
-  html += open.length ? open.map(todoRow).join('') : `<div class="empty compact"><b>เสร็จครบทุกงานแล้ว</b></div>`;
+  html += open.length ? open.map(todoRow).join('') : `<div class="empty compact"><b>Everything here is done</b></div>`;
   if (done.length) {
-    html += `<button class="done-toggle ${state.showDone ? 'open' : ''}" data-act="toggle-done" aria-expanded="${state.showDone}">${I.back}<span>เสร็จแล้ว ${done.length} งาน</span></button>`;
+    html += `<button class="done-toggle ${state.showDone ? 'open' : ''}" data-act="toggle-done" aria-expanded="${state.showDone}">${I.back}<span>Done (${done.length})</span></button>`;
     if (state.showDone) html += done.map(todoRow).join('');
   }
   el.innerHTML = html;
@@ -41,26 +125,26 @@ function renderTodos() {
 
 function todoRow(t) {
   const n = t.steps.length, k = t.steps.filter(s => s.done).length;
-  const late = !t.done && t.due && t.due < today();
   const meta = [
-    n ? `<span>${k}/${n} ขั้นตอน</span>` : '',
-    t.due ? `<span class="${late ? 'late' : ''}">${late ? 'เลยกำหนด' : 'กำหนด'} ${fmtShort(t.due)}</span>` : '',
-    state.cat === 'all' ? `<span class="tag c-${catOf(t)}">${catName(catOf(t))}</span>` : '',
+    n ? `<span>${k}/${n} steps</span>` : '',
+    t.due ? `<span class="${dueClass(t)}">${t.done ? `Due ${fmtShort(t.due)}` : dueText(t)}</span>` : '',
+    tagHTML(t),
   ].join('');
   return `<article class="todo c-${catOf(t)} ${t.done ? 'done' : ''}">
-    <button class="check ${t.done ? 'on' : ''}" data-act="todo-toggle" data-id="${t.id}" role="checkbox" aria-checked="${!!t.done}" aria-label="ทำเสร็จแล้ว: ${esc(t.title)}">${I.tick}</button>
+    <button class="check ${t.done ? 'on' : ''}" data-act="todo-toggle" data-id="${t.id}" role="checkbox" aria-checked="${!!t.done}" aria-label="Done: ${esc(t.title)}">${I.tick}</button>
     <div class="body" data-act="todo-open" data-id="${t.id}" role="button" tabindex="0">
-      <h3>${esc(t.title) || 'ไม่มีชื่อ'}</h3>
+      <h3>${esc(t.title) || 'Untitled task'}</h3>
       ${n && !t.done ? `<div class="bar sm"><i style="width:${todoPct(t)}%"></i></div>` : ''}
       ${meta ? `<div class="meta">${meta}</div>` : ''}
     </div></article>`;
 }
 
+// Ticking a task off also ticks all of its sub-steps.
 function setTaskDone(t, done) {
-  t.done = done;
-  t.doneAt = done ? Date.now() : 0;
-  if (done) t.steps.forEach(s => { s.done = true; }); // ติ๊กงานเสร็จ = ขั้นตอนย่อยเสร็จทั้งหมด
+  setTaskDoneOnly(t, done);
+  if (done) t.steps.forEach(s => { s.done = true; });
 }
+function setTaskDoneOnly(t, done) { t.done = done; t.doneAt = done ? Date.now() : 0; }
 
 /* ---------- task editor ---------- */
 function openTask(task, saved) {
@@ -73,27 +157,28 @@ function renderTask() {
   const t = state.task;
   app.innerHTML = `
     <header class="top">
-      <button class="icon-btn" data-act="back" aria-label="กลับ">${I.back}</button>
+      <button class="icon-btn" data-act="back" aria-label="Back">${I.back}</button>
       <span id="saved" class="saved"></span>
-      <button class="icon-btn danger" data-act="del-task" aria-label="ลบงานนี้">${I.trash}</button>
+      <button class="icon-btn danger" data-act="del-task" aria-label="Delete this task">${I.trash}</button>
     </header>
     <main class="editor">
-      <input id="t-title" class="e-title" placeholder="สิ่งที่ต้องทำ" maxlength="120" value="${esc(t.title)}">
-      <div class="cats" role="group" aria-label="หมวด">${CATS.map(c => `<button data-act="task-cat" data-cat="${c[0]}" class="c-${c[0]} ${catOf(t) === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</div>
+      <input id="t-title" class="e-title" placeholder="What needs to be done?" maxlength="120" value="${esc(t.title)}">
+      <div id="picker">${pickerHTML(t)}</div>
       <div class="row due-row">
         <label class="date-pick">${I.cal}<span id="due-label"></span>
-          <input type="date" id="t-due" value="${t.due}" aria-label="วันกำหนดเสร็จ"></label>
-        <button class="link" id="due-clear" data-act="due-clear">ล้างวัน</button>
+          <input type="date" id="t-due" value="${t.due}" aria-label="Due date"></label>
+        <button class="link" id="due-clear" data-act="due-clear">Clear</button>
+        <button class="link" id="due-cal" data-act="due-cal">Add to Calendar</button>
       </div>
       <div id="t-progress"></div>
-      <h2 class="sub">ขั้นตอนย่อย</h2>
+      <h2 class="sub">Steps</h2>
       <div id="steps"></div>
       <form id="step-form" class="step-add">
-        <input id="step-new" placeholder="เพิ่มขั้นตอน เช่น นัดหมอ, โอนเงิน" maxlength="120" enterkeyhint="done" autocomplete="off" aria-label="ขั้นตอนใหม่">
-        <button class="icon-btn" aria-label="เพิ่มขั้นตอน">${I.plus}</button>
+        <input id="step-new" placeholder="Add a step" maxlength="120" enterkeyhint="done" autocomplete="off" aria-label="New step">
+        <button class="icon-btn" aria-label="Add step">${I.plus}</button>
       </form>
-      <h2 class="sub">โน้ต</h2>
-      <textarea id="t-note" class="note" placeholder="รายละเอียดเพิ่มเติม">${esc(t.note)}</textarea>
+      <h2 class="sub">Notes</h2>
+      <textarea id="t-note" class="note" placeholder="More details">${esc(t.note)}</textarea>
     </main>`;
   $('#t-title').addEventListener('input', e => { t.title = e.target.value; scheduleTaskSave(); });
   const note = $('#t-note');
@@ -108,41 +193,38 @@ function renderTask() {
     const inp = $('#step-new'), text = inp.value.trim();
     if (!text) return;
     t.steps.push({ id: uid(), text, done: false });
-    if (t.done) setTaskDoneOnly(t, false); // เพิ่มขั้นตอนใหม่ให้งานที่เสร็จแล้ว = งานยังไม่เสร็จ
+    if (t.done) setTaskDoneOnly(t, false); // a new step on a finished task reopens it
     inp.value = ''; inp.focus();
-    renderSteps(); scheduleTaskSave();
+    renderSteps(); renderDue(); scheduleTaskSave();
   });
   renderDue();
   renderSteps();
   if (!state.taskSaved) $('#t-title').focus();
 }
 
-function setTaskDoneOnly(t, done) { t.done = done; t.doneAt = done ? Date.now() : 0; }
-
 function renderDue() {
   const t = state.task;
-  const late = !t.done && t.due && t.due < today();
   const label = $('#due-label');
-  const when = t.due && parseDate(t.due).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
-  label.textContent = t.due ? `${late ? 'เลยกำหนด' : 'กำหนดเสร็จ'} ${when}` : 'ตั้งวันกำหนดเสร็จ';
-  label.classList.toggle('late', !!late);
-  $('#due-clear').hidden = !t.due;
+  const when = t.due && parseDate(t.due).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
+  label.textContent = !t.due ? 'Set a due date' : t.done ? `Due ${when}` : daysUntil(t.due) > 7 || daysUntil(t.due) < 0 ? `${daysUntil(t.due) < 0 ? 'Overdue' : 'Due'} ${when}` : `${dueText(t)} (${fmtShort(t.due)})`;
+  label.className = t.due ? dueClass(t) : '';
+  $('#due-clear').hidden = $('#due-cal').hidden = !t.due;
 }
 
 function renderSteps() {
   const t = state.task;
   const n = t.steps.length, k = t.steps.filter(s => s.done).length, pct = todoPct(t);
   $('#t-progress').innerHTML = `<section class="progress-card c-${catOf(t)}">
-      <div class="pc-head"><span>${n ? `ทำแล้ว ${k} จาก ${n} ขั้นตอน` : 'ความคืบหน้า'}</span><b>${pct}%</b></div>
+      <div class="pc-head"><span>${n ? `${k} of ${plural(n, 'step')} done` : 'Progress'}</span><b>${pct}%</b></div>
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
       <button class="mark-done ${t.done ? 'on' : ''}" data-act="task-done" role="checkbox" aria-checked="${!!t.done}">
-        <span class="check ${t.done ? 'on' : ''}">${I.tick}</span>${t.done ? 'งานนี้เสร็จแล้ว' : 'ทำเครื่องหมายว่างานนี้เสร็จ'}</button>
+        <span class="check ${t.done ? 'on' : ''}">${I.tick}</span>${t.done ? 'This task is done' : 'Mark this task as done'}</button>
     </section>`;
   $('#steps').className = `c-${catOf(t)}`;
   $('#steps').innerHTML = t.steps.map(s => `<div class="step ${s.done ? 'done' : ''}">
       <button class="check ${s.done ? 'on' : ''}" data-act="step-toggle" data-id="${s.id}" role="checkbox" aria-checked="${s.done}" aria-label="${esc(s.text)}">${I.tick}</button>
       <span data-act="step-toggle" data-id="${s.id}">${esc(s.text)}</span>
-      <button class="icon-btn x" data-act="step-del" data-id="${s.id}" aria-label="ลบขั้นตอน">${I.close}</button>
+      <button class="icon-btn x" data-act="step-del" data-id="${s.id}" aria-label="Remove step">${I.close}</button>
     </div>`).join('');
 }
 
@@ -159,7 +241,7 @@ async function saveTask() {
   await dbPut('todos', t);
   if (!state.taskSaved) { state.todos.push(t); state.taskSaved = true; }
   const s = $('#saved');
-  if (s) s.textContent = 'บันทึกแล้ว';
+  if (s) s.textContent = 'Saved';
 }
 
 async function removeTask(t) {
@@ -176,12 +258,12 @@ async function leaveTask() {
   state.task = null;
 }
 
-/* ---------- actions (รวมเข้ากับ actions ของ app.js) ---------- */
+/* ---------- actions (merged into the actions table in app.js) ---------- */
 const todoActions = {
   nav: el => { state.section = el.dataset.section; state.day = null; renderHome(); window.scrollTo(0, 0); },
   'new-task': () => {
     const now = Date.now();
-    openTask({ id: uid(), title: '', note: '', cat: state.cat === 'all' ? 'life' : state.cat, due: '', done: false, doneAt: 0, steps: [], createdAt: now, updatedAt: now }, false);
+    openTask({ id: uid(), title: '', note: '', cat: state.cat === 'all' ? 'life' : state.cat, folder: state.folder, due: '', done: false, doneAt: 0, steps: [], createdAt: now, updatedAt: now }, false);
   },
   'todo-open': el => { const t = state.todos.find(x => x.id === el.dataset.id); if (t) openTask(t, true); },
   'todo-toggle': async el => {
@@ -190,34 +272,32 @@ const todoActions = {
     setTaskDone(t, !t.done);
     t.updatedAt = Date.now();
     await dbPut('todos', t);
-    renderTodos();
+    renderHome();
   },
   'toggle-done': () => { state.showDone = !state.showDone; renderTodos(); },
-  'task-cat': el => {
-    const t = state.task; t.cat = el.dataset.cat;
-    document.querySelectorAll('.cats button').forEach(b => b.classList.toggle('on', b.dataset.cat === t.cat));
-    renderSteps();
-    if (state.taskSaved) scheduleTaskSave();
-  },
   'due-clear': () => { state.task.due = ''; $('#t-due').value = ''; renderDue(); scheduleTaskSave(); },
+  'due-cal': () => {
+    const t = state.task;
+    if (t.due) saveOut(new Blob([taskICS(t)], { type: 'text/calendar' }), 'task.ics');
+  },
   'task-done': () => { const t = state.task; setTaskDone(t, !t.done); renderSteps(); renderDue(); scheduleTaskSave(); },
   'step-toggle': el => {
     const t = state.task, s = t.steps.find(x => x.id === el.dataset.id);
     if (!s) return;
     s.done = !s.done;
-    setTaskDoneOnly(t, t.steps.every(x => x.done)); // ครบทุกขั้นตอน = งานเสร็จอัตโนมัติ
+    setTaskDoneOnly(t, t.steps.every(x => x.done)); // all steps ticked = task done
     renderSteps(); renderDue(); scheduleTaskSave();
   },
   'step-del': el => {
     const t = state.task;
     t.steps = t.steps.filter(x => x.id !== el.dataset.id);
     if (t.steps.length && !t.done && t.steps.every(x => x.done)) setTaskDoneOnly(t, true);
-    renderSteps(); scheduleTaskSave();
+    renderSteps(); renderDue(); scheduleTaskSave();
   },
   'del-task': async () => {
     const t = state.task;
     if (state.taskSaved) {
-      if (!await ask('ลบงานนี้?', t.title || 'งานนี้และขั้นตอนย่อยทั้งหมดจะถูกลบถาวร', 'ลบ')) return;
+      if (!await ask('Delete this task?', t.title || 'This task and all of its steps will be permanently deleted.', 'Delete')) return;
       clearTimeout(taskTimer); taskTimer = null;
       await removeTask(t);
     }
@@ -226,11 +306,11 @@ const todoActions = {
   },
 };
 
-// ตรวจข้อมูลงานจากไฟล์สำรองก่อนนำเข้า
+// Validates a task read from storage or from a backup file.
 function cleanTodo(t) {
   if (!t?.id) return null;
   return {
-    id: String(t.id), title: String(t.title || ''), note: String(t.note || ''), cat: catOf(t),
+    id: String(t.id), title: String(t.title || ''), note: String(t.note || ''), cat: catOf(t), folder: String(t.folder || ''),
     due: /^\d{4}-\d{2}-\d{2}$/.test(t.due) ? t.due : '', done: !!t.done, doneAt: +t.doneAt || 0,
     steps: (Array.isArray(t.steps) ? t.steps : []).filter(s => s?.id).map(s => ({ id: String(s.id), text: String(s.text || ''), done: !!s.done })),
     createdAt: +t.createdAt || Date.now(), updatedAt: +t.updatedAt || Date.now(),
