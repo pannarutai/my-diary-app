@@ -39,6 +39,8 @@ const I = {
   bell: svg('<path d="M6 16v-5a6 6 0 0112 0v5l2 2H4z"/><path d="M10 21a2 2 0 004 0"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/>'),
   done: svg('<circle cx="12" cy="12" r="8.5"/><path d="M8 12.5l3 3 5-6"/>'),
+  film: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M16 4v16M3 9h5M3 15h5M16 9h5M16 15h5"/>'),
+  heart: svg('<path d="M12 20s-7-4.500-7-10a4 4 0 017-2.600A4 4 0 0119 10c0 5.500-7 10-7 10z"/>'),
   // blade outline with a point, cross-guard, grip and pommel
   sword: svg('<path d="M21 3l-.8 2.800L9.500 16.500l-2-2L18.200 3.800z"/><path d="M5.700 12.700l5.600 5.600M8.500 15.500L5.300 18.700"/><circle cx="4.300" cy="19.700" r="1.300"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
@@ -67,7 +69,7 @@ function tagHTML(e) {
 let db;
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open('diary', 3);
+    const r = indexedDB.open('diary', 4);
     r.onupgradeneeded = () => {
       // Only create what is missing, so upgrading keeps all existing data.
       const d = r.result;
@@ -79,6 +81,7 @@ function openDB() {
         ['todos', { keyPath: 'id' }],       // added in v2
         ['answers', { keyPath: 'id' }],     // added in v3: question of the day, one per date
         ['gratitude', { keyPath: 'id' }],   // added in v3
+        ['watch', { keyPath: 'id' }],       // added in v4: movies and anime
       ];
       for (const [name, opts] of stores) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, opts);
     };
@@ -98,6 +101,8 @@ const state = {
   view: 'home', section: 'today', entries: [], atts: [], q: '', cat: 'all', folder: '', folders: [],
   todos: [], task: null, taskSaved: false,
   answers: [], grats: [], showJar: false,
+  films: [], film: null, filmSaved: false, genres: { movie: [], anime: [] },
+  watch: { kind: 'all', genre: '', status: '', fav: false, q: '', sort: 'date' },
   calOpen: false, calMonth: today().slice(0, 7), day: null,
   cur: null, curSaved: false, busy: 0, viewer: null, pin: null, locked: false, hiddenAt: 0,
   settings: { compress: true, notify: false, remindDays: 1 },
@@ -192,7 +197,7 @@ async function hashPin(pin, salt) {
 /* ================= render ================= */
 function render() {
   if (state.locked) return renderLock();
-  ({ home: renderHome, editor: renderEditor, settings: renderSettings, task: renderTask })[state.view]();
+  ({ home: renderHome, editor: renderEditor, settings: renderSettings, task: renderTask, film: renderFilm })[state.view]();
   window.scrollTo(0, 0);
 }
 
@@ -226,32 +231,34 @@ function folderRow() {
 }
 
 function renderHome() {
-  const sec = state.section, diary = sec === 'diary', todo = sec === 'todo', now = sec === 'today';
+  const sec = state.section, diary = sec === 'diary', todo = sec === 'todo', now = sec === 'today', watch = sec === 'watch';
   const openCount = state.todos.filter(t => !t.done).length;
   const soon = dueSoon();
   const navBtn = (id, icon, label) => `<button data-act="nav" data-section="${id}" class="${sec === id ? 'on' : ''}">${icon}<span>${label}</span></button>`;
   app.innerHTML = `
-    <header class="top"><h1>${{ today: 'Today', diary: 'Diary', todo: 'To Do', done: 'Done' }[sec]}</h1><div class="row">
+    <header class="top"><h1 class="${watch ? 'long' : ''}">${{ today: 'Today', diary: 'Diary', todo: 'To Do', done: 'Done', watch: 'Movies &amp; Animation' }[sec]}</h1><div class="row">
       ${diary ? `<button class="icon-btn ${state.calOpen ? 'on' : ''}" data-act="cal" aria-label="Calendar">${I.cal}</button>` : ''}
       <a class="icon-btn" href="rpg/" aria-label="Open Life RPG" title="Life RPG">${I.sword}</a>
       <button class="icon-btn" data-act="settings" aria-label="Settings">${I.sliders}</button>
     </div></header>
     ${(diary || now) && soon.length ? `<button class="remind" data-act="nav" data-section="todo">${I.bell}<span>${remindSummary(soon)}</span>${I.back}</button>` : ''}
     ${diary ? `<div class="search">${I.search}<input type="search" id="q" placeholder="Search entries" autocomplete="off" value="${esc(state.q)}"></div>` : ''}
-    ${now ? '' : `<nav class="tabs" aria-label="Categories">${[['all', 'All'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
+    ${now || watch ? '' : `<nav class="tabs" aria-label="Categories">${[['all', 'All'], ...CATS].map(c => `<button data-act="tab" data-cat="${c[0]}" class="c-${c[0]} ${state.cat === c[0] ? 'on' : ''}">${c[1]}</button>`).join('')}</nav>
     ${folderRow()}`}
-    ${diary ? `<div id="cal"></div><main id="list" class="list"></main>` : `<main id="${{ today: 'today', todo: 'todos', done: 'done' }[sec]}" class="list"></main>`}
-    ${diary || todo ? `<button class="fab" data-act="${todo ? 'new-task' : 'new'}" aria-label="${todo ? 'Add a task' : 'Write a new entry'}">${I.plus}</button>` : ''}
+    ${diary ? `<div id="cal"></div><main id="list" class="list"></main>` : `<main id="${{ today: 'today', todo: 'todos', done: 'done', watch: 'watch' }[sec]}" class="list"></main>`}
+    ${diary || todo || watch ? `<button class="fab" data-act="${todo ? 'new-task' : watch ? 'film-new' : 'new'}" aria-label="${todo ? 'Add a task' : watch ? 'Add a movie or anime' : 'Write a new entry'}">${I.plus}</button>` : ''}
     <nav class="bottom-nav" aria-label="Main">
       ${navBtn('today', I.sun, 'Today')}
       ${navBtn('diary', I.book, 'Diary')}
       ${navBtn('todo', I.todo, `To Do${openCount ? ` <em>${openCount}</em>` : ''}`)}
       ${navBtn('done', I.done, 'Done')}
+      ${navBtn('watch', I.film, 'Watch')}
     </nav>`;
   updateBadge();
   if (now) return renderToday();
   if (todo) return renderTodos();
   if (sec === 'done') return renderDone();
+  if (watch) return renderWatch();
   $('#q').addEventListener('input', e => { state.q = e.target.value; renderList(); });
   renderCal();
   renderList();
@@ -330,8 +337,10 @@ function card(e) {
 
 /* ---------- category + folder picker (shared by the entry and task editors) ---------- */
 const editing = () => state.view === 'task'
-  ? { o: state.task, saved: state.taskSaved, save: scheduleTaskSave }
-  : { o: state.cur, saved: state.curSaved, save: scheduleSave };
+  ? { o: state.task, saved: state.taskSaved, save: scheduleTaskSave, flush: saveTask }
+  : state.view === 'film'
+    ? { o: state.film, saved: state.filmSaved, save: scheduleFilmSave, flush: saveFilm }
+    : { o: state.cur, saved: state.curSaved, save: scheduleSave, flush: persist };
 
 function pickerHTML(o) {
   const fs = foldersOf(catOf(o));
@@ -394,8 +403,9 @@ function renderEditor() {
 
 function renderAtts() {
   const el = $('#atts');
-  if (!el || !state.cur) return;
-  el.innerHTML = attsOf(state.cur.id).map(a => a.thumb
+  const owner = editing().o;
+  if (!el || !owner) return;
+  el.innerHTML = attsOf(owner.id).map(a => a.thumb
     ? `<div class="att img" data-act="view" data-id="${a.id}"><img src="${a.thumb}" alt="${esc(a.name)}">
         <button class="x" data-act="del-att" data-id="${a.id}" aria-label="Remove photo">${I.close}</button></div>`
     : `<div class="att file" data-act="view" data-id="${a.id}">${I.file}<div><b>${esc(a.name)}</b><small>${fmtSize(a.size)}</small></div>
@@ -460,9 +470,10 @@ const MAX_SIDE = 2000, BIG_FILE = 100 * 1048576;
 
 async function addFiles(fileList, fromCamera) {
   const files = [...fileList];
-  if (!files.length || !state.cur) return;
-  const entry = state.cur;
-  await persist();
+  const ed = editing();
+  if (!files.length || !ed.o) return;
+  const entry = ed.o; // a diary entry or a movie / anime title
+  await ed.flush();
   state.busy++; renderAtts();
   let failed = 0;
   for (const file of files) {
@@ -573,6 +584,7 @@ function renderSettings() {
         <div class="set-row"><span>Folders</span><span>${state.folders.length}</span></div>
         <div class="set-row"><span>Answered questions</span><span>${state.answers.length}</span></div>
         <div class="set-row"><span>Gratitude notes</span><span>${state.grats.length}</span></div>
+        <div class="set-row"><span>Movies and anime</span><span>${state.films.length}</span></div>
         <div class="set-row"><span>Photos and files</span><span>${state.atts.length} (${fmtSize(state.atts.reduce((n, a) => n + a.size, 0))})</span></div>
         <div class="set-row"><span>Protected storage</span><span id="s-persist">…</span></div></section>
     </main>`;
@@ -615,7 +627,7 @@ const toB64 = blob => new Promise((res, rej) => {
 
 async function exportAll() {
   toast('Preparing the backup file…');
-  const head = { app: 'diary', version: 2, exportedAt: new Date().toISOString(), folders: state.folders, entries: state.entries, todos: state.todos, answers: state.answers, gratitude: state.grats };
+  const head = { app: 'diary', version: 2, exportedAt: new Date().toISOString(), folders: state.folders, entries: state.entries, todos: state.todos, answers: state.answers, gratitude: state.grats, watch: state.films, genres: state.genres };
   const parts = [JSON.stringify(head).slice(0, -1) + ',"attachments":['];
   let first = true;
   for (const a of state.atts) {
@@ -657,6 +669,15 @@ async function importFile(file) {
     for (const raw of Array.isArray(data.gratitude) ? data.gratitude : []) {
       const g = cleanGrat(raw);
       if (g) await dbPut('gratitude', g);
+    }
+    for (const raw of Array.isArray(data.watch) ? data.watch : []) {
+      const f = cleanFilm(raw);
+      if (f) await dbPut('watch', f);
+    }
+    if (data.genres) {
+      const add = cleanGenres(data.genres);
+      for (const k of ['movie', 'anime']) state.genres[k] = [...new Set([...state.genres[k], ...add[k]])];
+      await dbPut('meta', state.genres, 'genres');
     }
     for (const a of data.attachments || []) {
       if (!a?.id || !a.entryId || typeof a.data !== 'string') continue;
@@ -719,6 +740,7 @@ async function folderMenu() {
 const actions = {
   ...todoActions,
   ...reflectActions,
+  ...watchActions,
   new: () => { const now = Date.now(); openEditor({ id: uid(), date: state.day || today(), cat: state.cat === 'all' ? 'life' : state.cat, folder: state.folder, title: '', text: '', mood: '', createdAt: now, updatedAt: now }, false); },
   tab: el => { state.cat = el.dataset.cat; state.folder = ''; renderHome(); },
   folder: el => { state.folder = el.dataset.id; renderHome(); },
@@ -790,7 +812,7 @@ document.addEventListener('click', e => {
   if (el && actions[el.dataset.act]) { e.preventDefault(); actions[el.dataset.act](el); }
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.matches?.('.card, .todo .body')) e.target.click();
+  if (e.key === 'Enter' && e.target.matches?.('.card, .todo .body, .poster')) e.target.click();
 });
 
 for (const [id, cam] of [['pick-camera', true], ['pick-gallery', false], ['pick-file', false]]) {
@@ -800,7 +822,7 @@ $('#pick-import').addEventListener('change', async e => { const f = e.target.fil
 
 window.addEventListener('popstate', async () => {
   if (state.viewer) return closeViewer();
-  if (state.view !== 'home') { await leaveEditor(); await leaveTask(); state.view = 'home'; render(); }
+  if (state.view !== 'home') { await leaveEditor(); await leaveTask(); await leaveFilm(); state.view = 'home'; render(); }
 });
 
 const RELOCK_MS = 5 * 60 * 1000;
@@ -809,17 +831,19 @@ document.addEventListener('visibilitychange', async () => {
     state.hiddenAt = Date.now();
     if (saveTimer) await persist();
     if (taskTimer) await saveTask();
+    if (filmTimer) await saveFilm();
     if (answerTimer) await saveAnswer();
   } else if (state.pin && !state.locked && state.hiddenAt && Date.now() - state.hiddenAt > RELOCK_MS && !state.busy) {
     if (state.viewer) closeViewer();
     await leaveEditor();
     await leaveTask();
+    await leaveFilm();
     state.view = 'home'; state.locked = true; render();
   } else if (!state.locked) {
     checkReminders();
   }
 });
-window.addEventListener('pagehide', () => { if (saveTimer) persist(); if (taskTimer) saveTask(); if (answerTimer) saveAnswer(); });
+window.addEventListener('pagehide', () => { if (saveTimer) persist(); if (taskTimer) saveTask(); if (filmTimer) saveFilm(); if (answerTimer) saveAnswer(); });
 
 /* ================= boot ================= */
 async function loadAll() {
@@ -829,6 +853,8 @@ async function loadAll() {
   state.todos = (await dbAll('todos')).map(cleanTodo).filter(Boolean);
   state.answers = await dbAll('answers');
   state.grats = await dbAll('gratitude');
+  state.films = (await dbAll('watch')).map(cleanFilm).filter(Boolean);
+  state.genres = cleanGenres(await dbGet('meta', 'genres'));
   sortEntries();
 }
 

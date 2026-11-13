@@ -1,7 +1,7 @@
 // Lets the app open without internet. Bump the version number whenever app files change (Life RPG in rpg/ included).
 // Every download here skips the browser's own 10-minute copy, so a new version is never mixed with old files.
-const CACHE = 'diary-v7';
-const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'reflect.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
+const CACHE = 'diary-v8';
+const ASSETS = ['./', 'index.html', 'styles.css', 'todo.js', 'reflect.js', 'watch.js', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
   'rpg/', 'rpg/index.html', 'rpg/styles.css', 'rpg/data.js', 'rpg/app.js', 'rpg/icons/icon-192.png'];
 
 self.addEventListener('install', e => {
